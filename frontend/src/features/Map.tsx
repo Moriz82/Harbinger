@@ -1,0 +1,61 @@
+import React, { useEffect, useRef, useState } from 'react'
+import { ApiError, api, Asset, downloadJson, Graph, RecordItem, Session } from '../api'
+import { ErrorMessage, Empty, DirtyDialog, Field } from '../components/common'
+import cytoscape, { Core } from 'cytoscape'
+const TRACKS = ['network', 'web', 'linux', 'windows_ad', 'database_service']
+function GraphCanvas({ graph, selected, onSelect }: { graph: Graph | null; selected: string | null; onSelect: (id: string) => void }) {
+  const host = useRef<HTMLDivElement>(null); const instance = useRef<Core | null>(null); const selectRef = useRef(onSelect); const identity = useRef(''); selectRef.current = onSelect
+  useEffect(() => { if (!host.current) return; try { instance.current = cytoscape({ container: host.current, headless: /jsdom/i.test(navigator.userAgent), elements: [], layout: { name: 'preset' }, style: [{ selector: 'node', style: { label: 'data(label)', 'background-color': '#55C7D3', color: '#24333F', 'text-background-color': '#F5F8FA', 'text-background-opacity': 0.95, 'text-background-padding': '3px', 'text-valign': 'bottom', 'text-margin-y': 8, width: 32, height: 38 } }, { selector: 'edge', style: { 'line-color': '#A8BDC9', 'target-arrow-color': '#A8BDC9', 'target-arrow-shape': 'triangle' } }, { selector: ':selected', style: { 'background-color': '#F1BC5B' } }] }); instance.current.on('tap', 'node', e => selectRef.current(e.target.id())) } catch { instance.current = null }; return () => instance.current?.destroy() }, [])
+  useEffect(() => { const cy = instance.current; if (!cy || !graph) return; const nextIdentity = `${graph.nodes.map(n => n.id).sort().join(',')}|${graph.edges.map(e => `${e.id}:${e.source}:${e.target}`).sort().join(',')}`; const changed = identity.current !== nextIdentity; const ids = new Set(graph.nodes.map(n => n.id)); cy.nodes().filter(n => !ids.has(n.id())).remove(); cy.edges().filter(e => !graph.edges.some(next => next.id === e.id())).remove(); graph.nodes.forEach(n => cy.getElementById(n.id).length ? cy.getElementById(n.id).data(n) : cy.add({ data: n })); graph.edges.forEach(e => cy.getElementById(e.id).length ? cy.getElementById(e.id).data(e) : cy.add({ data: e })); if (changed && cy.nodes().length && !/jsdom/i.test(navigator.userAgent)) cy.layout(cy.nodes().length > 120 ? { name: 'grid', animate: false, padding: 40 } : { name: 'cose', animate: false, randomize: false, padding: 40 }).run(); identity.current = nextIdentity }, [graph])
+  useEffect(() => { instance.current?.nodes().unselect(); if (selected) instance.current?.getElementById(selected).select() }, [selected])
+  return <div className="graph-container"><div className="graph" ref={host} aria-label="Evidence relationship map" /><div className="graph-controls"><button onClick={() => instance.current?.fit(undefined, 40)}>Fit view</button><button aria-label="Zoom in" onClick={() => { const cy = instance.current; if (cy) cy.zoom(cy.zoom() * 1.2) }}>+</button><button aria-label="Zoom out" onClick={() => { const cy = instance.current; if (cy) cy.zoom(cy.zoom() / 1.2) }}>−</button></div></div>
+}
+
+function Overview({ refreshKey }: { refreshKey: number }) {
+  const [track, setTrack] = useState(''), [typed, setTyped] = useState(''), [q, setQ] = useState(''), [page, setPage] = useState(0)
+  const [graph, setGraph] = useState<Graph | null>(null), [assets, setAssets] = useState<Asset[]>([]), [total, setTotal] = useState(0)
+  const [selected, setSelected] = useState<string | null>(null), [detail, setDetail] = useState<Asset | null>(null)
+  const [error, setError] = useState<unknown>(null), [graphError, setGraphError] = useState<unknown>(null)
+  const [loading, setLoading] = useState(true), [loaded, setLoaded] = useState(false), [retry, setRetry] = useState(0)
+  const [view, setView] = useState<'map' | 'table'>('map'), [inspector, setInspector] = useState(true)
+  const request = useRef(0), limit = 100
+  useEffect(() => {
+    const ticket = ++request.current; setLoading(true); setError(null); setGraphError(null)
+    const args = new URLSearchParams({ q, track })
+    void Promise.allSettled([
+      api.get<{ items: Asset[]; total: number }>(`/api/assets?${new URLSearchParams({ q, track, offset: String(page * limit), limit: String(limit) })}`),
+      api.get<Graph>(`/api/graph?${args}`)
+    ]).then(([a, g]) => {
+      if (ticket !== request.current) return
+      if (a.status === 'fulfilled') { setAssets(a.value.items); setTotal(a.value.total ?? a.value.items.length); setLoaded(true); setSelected(old => old ?? a.value.items[0]?.id ?? null) } else setError(a.reason)
+      if (g.status === 'fulfilled') setGraph(g.value); else setGraphError(g.reason)
+      setLoading(false)
+    })
+    return () => { request.current++ }
+  }, [page, track, q, refreshKey, retry])
+  useEffect(() => {
+    let cancelled = false
+    const inPage = assets.find(asset => asset.id === selected)
+    setDetail(inPage ?? null)
+    if (selected && !inPage) void api.get<Asset>(`/api/assets/${selected}`).then(value => { if (!cancelled && value.id === selected) setDetail(value) }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [selected, assets])
+  function select(id: string) { setSelected(id); setInspector(true) }
+  const selectedNode = graph?.nodes.find(node => node.id === selected)
+  const relationships = graph?.edges.filter(edge => edge.source === selected || edge.target === selected) ?? []
+  const name = detail?.label ?? selectedNode?.label ?? selected ?? 'No selection'
+  return <section className="map-page">
+    <div className="page-head"><div><h1>Evidence map</h1><p className="muted">Follow the recorded relationships. Keep their source in view.</p></div><div className="view-switch" role="group" aria-label="Workspace view"><button aria-pressed={view === 'map'} onClick={() => setView('map')}>Map</button><button aria-pressed={view === 'table'} onClick={() => setView('table')}>Table</button><button aria-pressed={inspector} onClick={() => setInspector(value => !value)}>Inspector</button></div></div>
+    <form className="toolbar map-filters" onSubmit={event => { event.preventDefault(); setQ(typed); setPage(0) }}><input aria-label="Search assets" value={typed} maxLength={200} onChange={event => setTyped(event.target.value)} placeholder="Search assets by name or address" /><button>Search</button><div role="group" aria-label="Track filters">{['', ...TRACKS].map(value => <button type="button" aria-label={value || 'All tracks'} aria-pressed={track === value} key={value || 'all'} onClick={() => { setTrack(value); setPage(0) }}>{value === 'windows_ad' ? 'Windows / AD' : value === 'database_service' ? 'Data services' : value ? value.charAt(0).toUpperCase() + value.slice(1) : 'All tracks'}</button>)}</div></form>
+    <div className="result-summary" role="status"><span>Showing {assets.length} of {total.toLocaleString()} assets</span>{graph && <span>Graph: {graph.nodes.length.toLocaleString()} of {graph.total_nodes.toLocaleString()} matching assets</span>}<span>{loading ? loaded ? 'Refreshing results…' : 'Loading assets…' : ''}</span></div>
+    <ErrorMessage error={error} />{Boolean(error) && <button onClick={() => setRetry(value => value + 1)}>Retry assets</button>}
+    {Boolean(graphError) && graph && <div className="notice" role="status"><strong>Map is stale. The latest refresh failed.</strong><ErrorMessage error={graphError} /><button onClick={() => setRetry(value => value + 1)}>Retry map</button></div>}
+    {loading && graph && <p className="muted">The displayed map is from the previous successful request.</p>}
+    <div className={`map-workspace ${view === 'table' ? 'table-only' : 'map-mode'} ${inspector ? 'with-inspector' : ''}`}>
+      {view === 'map' && <div className="map-board">{graph ? <GraphCanvas graph={graph} selected={selected} onSelect={select} /> : <div className="panel"><strong>{loading ? 'Loading relationship map…' : 'Relationship map unavailable.'}</strong><ErrorMessage error={graphError} />{Boolean(graphError) && <button onClick={() => setRetry(value => value + 1)}>Retry map</button>}</div>}<p className="graph-note">{graph ? `${graph.edges.length.toLocaleString()} of ${graph.total_edges.toLocaleString()} relationships among the returned assets. The map is bounded to 500 assets and 1,000 relationships.` : 'The asset table remains available when the map cannot load.'}</p></div>}
+      <div className="table-wrap asset-table"><table><caption className="sr-only">Imported assets</caption><thead><tr><th>Asset</th><th>Kind</th><th>Track</th><th>Revision</th></tr></thead><tbody>{assets.map(asset => <tr key={asset.id} tabIndex={0} aria-selected={asset.id === selected} className={asset.id === selected ? 'selected' : ''} onClick={() => select(asset.id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(asset.id) } }}><td>{asset.label}</td><td>{asset.kind}</td><td>{asset.track.replace(/_/g, ' ')}</td><td className="mono">{asset.revision_id.slice(0, 8)}</td></tr>)}</tbody></table>{loaded && !loading && !error && !assets.length && <Empty title={q || track ? 'No matching assets' : 'No assets yet'} body={q || track ? 'Change the search or track filter.' : 'Import a source file to populate this workspace.'} />}<div className="actions pagination" aria-label="Asset pages"><button disabled={loading || page === 0} onClick={() => setPage(value => value - 1)}>Previous</button><span>Page {page + 1}</span><button disabled={loading || (page + 1) * limit >= total} onClick={() => setPage(value => value + 1)}>Next</button></div></div>
+      {inspector && <aside className="asset-inspector panel" aria-label="Asset inspector"><div className="detail-head"><h2>Asset details</h2><button aria-label="Close inspector" onClick={() => setInspector(false)}>Close</button></div>{selected ? <><h3>Details for {name}</h3><dl><dt>Kind</dt><dd>{detail?.kind ?? selectedNode?.kind ?? 'Not available'}</dd><dt>Track</dt><dd>{(detail?.track ?? selectedNode?.track ?? 'Not available').replace(/_/g, ' ')}</dd></dl><h3>Loaded map relationships</h3>{relationships.length ? <ul className="relationship-list">{relationships.map(edge => <li key={edge.id}><strong>{edge.label || 'Recorded relationship'}</strong><span>{graph?.nodes.find(node => node.id === edge.source)?.label ?? edge.source} → {graph?.nodes.find(node => node.id === edge.target)?.label ?? edge.target}</span><small>Source artifact: {edge.source_artifact || 'Not recorded in this response'}</small></li>)}</ul> : <p className="muted">No relationships for this asset are included in the loaded map. This is not a complete relationship inventory.</p>}<details><summary>Record identity</summary><dl><dt>Asset ID</dt><dd className="mono">{selected}</dd><dt>Revision</dt><dd className="mono">{detail?.revision_id ?? 'Not available'}</dd></dl></details><p className="muted">Full evidence and finding context is unavailable in this view.</p><a className="button-link" href="#/findings">Open findings</a></> : <Empty title="Select an asset" body="Choose a map node or table row to inspect it." />}</aside>}
+    </div>
+  </section>
+}
+export { GraphCanvas, Overview }

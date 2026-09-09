@@ -1,0 +1,10 @@
+:root {
+ font-family: Cantarell, "Noto Sans", system-ui, sans-serif; font-size:14px;
+ color:#24333f; background:#eaf0f3;
+ --ink:#24333f; --muted:#526471; --canvas:#eaf0f3; --surface:#fff;
+ --chrome:#233b49; --plot:#f5f8fa; --action:#175e72; --selection:#dfedf2;
+ --line:#cad4dc; --input-line:#6f8492; --focus:#6b43b5;
+ --success:#21654b; --warning:#875017; --danger:#a53242;
+ --nav-width:184px; --page-padding:24px;
+}
+@media(min-width:1600px){:root{--nav-width:208px;--page-padding:32px}}

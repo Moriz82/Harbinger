@@ -20,3 +20,11 @@ Private release acceptance, 2026-09-09:
 - Live failure tests added immutable SQLite identity reads, sealed backup databases, full staged-file rehashing, bounded parser recovery, and descriptor-leak checks. An independent final review found no release blocker in these areas.
 - Dell evidence: Kali VMs 1110 and 1111, private TLS pairing, LAN and encrypted-file exchange, backup and restore, and performance fixtures.
 - Runtime model calls: zero.
+
+Frontend redesign and responsive QA, 2026-09-09:
+
+- Design and implementation: Astra agent (`/root/astra_ui_redesign_plan`), `gpt-6-astra`, xhigh.
+- Integration and browser QA: main agent.
+- Scope: React interface, styles, accessibility behavior, synthetic fixtures, and documentation only.
+- Verification: 36 frontend tests, TypeScript typecheck, production build, Docker rebuild, and six synthetic Playwright captures across three viewports.
+- Runtime model calls: zero.

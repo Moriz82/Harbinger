@@ -32,7 +32,7 @@ function baseFetch(path: string, init?: RequestInit) {
   return response({})
 }
 
-beforeEach(() => { eventSources.length = 0; vi.stubGlobal('EventSource', MockEventSource); fetchMock = vi.fn(baseFetch); vi.stubGlobal('fetch', fetchMock) })
+beforeEach(() => { history.replaceState(null, '', '#/overview'); eventSources.length = 0; vi.stubGlobal('EventSource', MockEventSource); fetchMock = vi.fn(baseFetch); vi.stubGlobal('fetch', fetchMock) })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('Harbinger UI contract', () => {
@@ -237,7 +237,7 @@ describe('Harbinger UI contract', () => {
     render(<App />)
     fireEvent.click(await screen.findByRole('link', { name: 'Findings' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Submit to lead' }))
-    expect(await screen.findByRole('status')).toHaveTextContent('Submitted to lead')
+    expect(await screen.findByText(/Submitted to lead\. The technical finding/)).toBeInTheDocument()
     expect(screen.getByLabelText('Title')).toHaveValue('Old finding')
     expect(screen.getByRole('button', { name: 'Submit to lead' })).toBeDisabled()
     const submit = fetchMock.mock.calls.find(call => String(call[0]) === '/api/findings/finding-1/submit')
