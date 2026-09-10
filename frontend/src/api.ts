@@ -9,6 +9,7 @@ export type Session = {
 export type RecordItem = { id: string; kind: string; revision_id: string; data: Record<string, unknown>; updated_at: string }
 export type Asset = { id: string; label: string; kind: string; track: string; data?: Record<string, unknown>; revision_id: string }
 export type Graph = { nodes: { id: string; label: string; kind: string; track: string }[]; edges: { id: string; source: string; target: string; label: string; source_artifact?: string }[]; total_nodes: number; total_edges: number }
+export type HarnessTrust = { trusted: true; source_id: string; key_id: string; profile: string; outcome: string; envelope_id: string; observation_id: string; signed_sha256: string; observation_sha256: string; evidence_count: number; evidence_sha256: string[] }
 
 export class ApiError extends Error {
   status: number

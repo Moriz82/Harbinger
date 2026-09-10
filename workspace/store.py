@@ -91,6 +91,8 @@ class Store:
                 CREATE TABLE IF NOT EXISTS imports(key TEXT PRIMARY KEY, record_id TEXT NOT NULL REFERENCES records(id));
                 CREATE TABLE IF NOT EXISTS transfers(id TEXT PRIMARY KEY, hash TEXT NOT NULL, receipt TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS peer_http_nonces(source TEXT NOT NULL, nonce TEXT NOT NULL, created INTEGER NOT NULL, PRIMARY KEY(source,nonce));
+                CREATE TABLE IF NOT EXISTS harness_sources(source_id TEXT PRIMARY KEY, card TEXT NOT NULL, fingerprint TEXT NOT NULL, status TEXT NOT NULL, enrolled_at TEXT NOT NULL, revoked_at TEXT);
+                CREATE TABLE IF NOT EXISTS harness_envelopes(envelope_id TEXT PRIMARY KEY, observation_id TEXT UNIQUE NOT NULL, source_id TEXT NOT NULL, signed_sha256 TEXT NOT NULL, observation_sha256 TEXT NOT NULL, artifact_sha256 TEXT NOT NULL, upload_id TEXT NOT NULL REFERENCES records(id), status TEXT NOT NULL, recorded_at TEXT NOT NULL);
                 ''')
         for name in ("audit.jsonl", "transcript.log"):
             p = self.root / name
@@ -119,15 +121,7 @@ class Store:
     @contextlib.contextmanager
     def tx(self):
         with self.lock:
-            if self.readonly:
-                raise RuntimeError('This workspace is open read-only')
-            if self.blocked:
-                raise RuntimeError(self.blocked)
-            for name in ("", "workspace.db", "audit.jsonl", "transcript.log", "artifacts", "keys", "staging", "conflicts", "exports"):
-                private(self.root / name)
-            if self.audit_stats is not None and self.audit_stats != self._stats():
-                self.blocked = 'Audit files changed outside the writer. Inspect integrity before new work.'
-                raise RuntimeError(self.blocked)
+            self._assert_write_ready()
             c = self.connect()
             try:
                 c.execute("BEGIN IMMEDIATE")
@@ -143,6 +137,22 @@ class Store:
                 raise
             finally:
                 c.close()
+
+    def _assert_write_ready(self):
+        if self.readonly:
+            raise RuntimeError('This workspace is open read-only')
+        if self.blocked:
+            raise RuntimeError(self.blocked)
+        for name in ("", "workspace.db", "audit.jsonl", "transcript.log", "artifacts", "keys", "staging", "conflicts", "exports"):
+            private(self.root / name)
+        if self.audit_stats is not None and self.audit_stats != self._stats():
+            self.blocked = 'Audit files changed outside the writer. Inspect integrity before new work.'
+            raise RuntimeError(self.blocked)
+
+    def require_write_ready(self):
+        """Check the same preconditions as ``tx`` without starting a write."""
+        with self.lock:
+            self._assert_write_ready()
 
     def event(self, c, actor, operation, ids=(), **metadata):
         previous = c.execute("SELECT seq,hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
@@ -203,6 +213,29 @@ class Store:
                 private(path)
                 if not path.is_file() or path.stat().st_size != data.get('ciphertext_size') or file_digest(path) != data.get('ciphertext_sha256'):
                     raise ValueError('Conflict bundle integrity failed')
+            tables = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if 'harness_sources' in tables:
+                for row in c.execute('SELECT * FROM harness_sources'):
+                    card = json.loads(row['card'])
+                    if (row['status'] not in ('active', 'revoked') or digest(card) != row['fingerprint']
+                            or card.get('source_id') != row['source_id'] or (row['status'] == 'active') != (row['revoked_at'] is None)):
+                        raise ValueError('Harness source enrollment integrity failed')
+            if 'harness_envelopes' in tables:
+                for row in c.execute('SELECT * FROM harness_envelopes'):
+                    upload = self.get(row['upload_id'], c)
+                    hashes = (row['signed_sha256'], row['observation_sha256'], row['artifact_sha256'])
+                    trust = upload['data'].get('harness_trust', {}) if upload else {}
+                    if (row['status'] not in ('uploaded', 'merged') or not upload or upload['kind'] != 'upload'
+                            or upload['data'].get('format') != 'harness_observation_v1'
+                            or upload['data'].get('sha256') != row['artifact_sha256']
+                            or trust.get('envelope_id') != row['envelope_id'] or trust.get('observation_id') != row['observation_id']
+                            or trust.get('source_id') != row['source_id'] or trust.get('signed_sha256') != row['signed_sha256']
+                            or trust.get('observation_sha256') != row['observation_sha256']
+                            or ('harness_sources' in tables and not c.execute('SELECT 1 FROM harness_sources WHERE source_id=?', (row['source_id'],)).fetchone())
+                            or (row['status'] == 'merged') != (upload['data'].get('status') == 'merged')
+                            or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z', row['recorded_at'] or '')
+                            or any(not re.fullmatch(r'[0-9a-f]{64}', value or '') for value in hashes)):
+                        raise ValueError('Harness envelope index integrity failed')
             export_groups = {}
             for path in (self.root / 'exports').iterdir():
                 private(path)

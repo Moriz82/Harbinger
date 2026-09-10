@@ -374,6 +374,8 @@ def main():
     serve = sub.add_parser('serve'); serve.add_argument('--cert', type=Path); serve.add_argument('--key', type=Path); serve.add_argument('--bind')
     sub.add_parser('verify'); sub.add_parser('info'); sub.add_parser('keygen'); sub.add_parser('peer-card')
     peer = sub.add_parser('enroll'); peer.add_argument('card', type=Path); peer.add_argument('--fingerprint', required=True)
+    harness_peer = sub.add_parser('harness-enroll'); harness_peer.add_argument('card', type=Path); harness_peer.add_argument('--fingerprint', required=True)
+    harness_revoke = sub.add_parser('harness-revoke'); harness_revoke.add_argument('source_id')
     back = sub.add_parser('backup'); back.add_argument('destination', type=Path)
     restore_parser = sub.add_parser('restore'); restore_parser.add_argument('source', type=Path)
     gw = sub.add_parser('ghostwriter'); gw.add_argument('--origin', required=True); gw.add_argument('--report-id', type=int, required=True); gw.add_argument('--severity-id', type=int, required=True); gw.add_argument('--finding-type-id', type=int, required=True)
@@ -408,6 +410,18 @@ def main():
         elif args.command == 'enroll':
             from .transfer import enroll
             enroll(store, json.loads(args.card.read_text()), args.fingerprint); print('Peer enrolled.')
+        elif args.command == 'harness-enroll':
+            if APP_NAME != 'Harbinger':
+                raise ValueError('Harness sources are enrolled only in Harbinger')
+            from .harness_trust import enroll_harness_source, parse_harness_json
+            enroll_harness_source(store, parse_harness_json(args.card.read_bytes()), args.fingerprint)
+            print('Harness source enrolled.')
+        elif args.command == 'harness-revoke':
+            if APP_NAME != 'Harbinger':
+                raise ValueError('Harness sources are revoked only in Harbinger')
+            from .harness_trust import revoke_harness_source
+            revoke_harness_source(store, args.source_id)
+            print('Harness source revoked.')
         elif args.command == 'backup':
             print(canonical(backup(store, args.destination)))
         elif args.command == 'ghostwriter':

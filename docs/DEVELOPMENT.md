@@ -14,6 +14,8 @@ npm run build
 
 Harbinger parser adapters are in `workspace/parsers`. Add a format only with bounded parsing, offline behavior, clear limitations, and tests. Merlin Ghostwriter work is in `workspace/ghostwriter_adapter`; keep review, revision, and uncertain-delivery gates intact.
 
+Harness fixtures must use synthetic Ed25519 keys generated in the test process. Sign the canonical unsigned envelope produced by `workspace.store.canonical`; the `signature` property is absent from those signed bytes. Test duplicate keys, non-finite values, UTF-8/BOM/trailing data, depth, schema, size, source/revocation, engagement/profile/review/key binding, replay, merge acknowledgement, and transfer preservation. Never import a harness repository or call a target from these tests.
+
 Run the optional synthetic performance tool separately. It is not a pytest test and it does not contact a target:
 
 ```sh

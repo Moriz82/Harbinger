@@ -7,6 +7,7 @@ const finding = { id: 'f1', kind: 'finding', revision_id: 'r1', updated_at: '202
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 let fetchMock: ReturnType<typeof vi.fn>
 function base(path: string) {
+  if (path === '/api/readiness') return response({ write_ready: true })
   if (path === '/api/records?kind=finding') return response({ items: [finding], total: 1 })
   if (path.startsWith('/api/assets')) { const page = new URL(path, 'http://localhost').searchParams; return response({ items: [{ id: page.get('offset') === '100' ? 'a151' : 'a1', label: page.get('offset') === '100' ? 'Asset 151' : 'Asset 1', kind: 'host', track: 'network', revision_id: 'ra' }], total: 151 }) }
   if (path.startsWith('/api/graph')) return response({ nodes: [], edges: [], total_nodes: 0, total_edges: 0 })

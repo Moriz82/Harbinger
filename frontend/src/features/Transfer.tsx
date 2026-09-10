@@ -12,24 +12,28 @@ function TransferRecordDiff({ id, incoming, local }: { id: string; incoming?: Re
   return <details className="record-diff" open><summary>Conflicting record {id}: inspect all differing fields before accepting</summary><div className="diff-metadata"><div><strong>Incoming owner revision</strong>{metadata(incoming)}</div><div><strong>Current local revision</strong>{metadata(local)}</div></div>{fields.length ? <div className="diff-fields">{fields.map(field => <div className="diff-field" key={field}><strong>{field}</strong><div><span>Incoming</span>{value(incomingData[field])}</div><div><span>Local</span>{value(localData[field])}</div></div>)}</div> : <p>No data fields differ; inspect identity, revision, and provenance above.</p>}</details>
 }
 
-function TransferConflictReview({ canReview }: { canReview: boolean }) {
+function TransferConflictReview({ canReview, online, canWrite, onWriteUnavailable = () => undefined, onWriteAvailable = () => undefined }: { canReview: boolean; online: boolean; canWrite: boolean; onWriteUnavailable?: () => void; onWriteAvailable?: () => void }) {
   const [items, setItems] = useState<TransferConflict[]>([])
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState<unknown>(null)
   const [resolution, setResolution] = useState<{ decision: 'keep_local' | 'accept_incoming'; imported: number; duplicates: number; bundle_id: string; manifest_hash: string } | null>(null)
+  const [loading, setLoading] = useState(false)
+  const request = useRef(0)
   async function load() {
-    if (!canReview) return
-    setError(null)
+    if (!canReview || !online) return
+    const ticket = ++request.current
+    setError(null); setLoading(true)
     try {
       const result = await api.get<{ items?: TransferConflict[] }>('/api/transfers/conflicts')
+      if (ticket !== request.current) return
       setItems(result.items ?? [])
       setLoaded(true)
-    } catch (err) { setError(err) }
+    } catch (err) { if (ticket === request.current) setError(err) } finally { if (ticket === request.current) setLoading(false) }
   }
-  useEffect(() => { void load() }, [canReview])
+  useEffect(() => { if (canReview && online) void load(); else setLoading(false); return () => { request.current++ } }, [canReview, online])
   async function resolve(item: TransferConflict, decision: 'keep_local' | 'accept_incoming') {
-    if (!canReview) return
+    if (!canReview || !canWrite) return
     setBusy(item.id)
     setError(null)
     try {
@@ -45,8 +49,10 @@ function TransferConflictReview({ canReview }: { canReview: boolean }) {
       const deferred = Array.isArray(data.deferred_ids) ? data.deferred_ids : []
       const duplicates = Array.isArray(data.duplicate_ids) ? data.duplicate_ids : []
       setResolution({ decision, imported: decision === 'accept_incoming' ? conflicts.length + deferred.length : 0, duplicates: duplicates.length, bundle_id: String(data.bundle_id ?? ''), manifest_hash: String(data.manifest_hash ?? '') })
+      onWriteAvailable()
       await load()
     } catch (err) {
+      if (err instanceof ApiError && err.status === 503) onWriteUnavailable()
       if (err instanceof ApiError && err.status === 409) await load()
       setError(err)
     } finally { setBusy('') }
@@ -55,8 +61,9 @@ function TransferConflictReview({ canReview }: { canReview: boolean }) {
   return <section className="conflict-review" aria-labelledby="transfer-conflicts">
     <h3 id="transfer-conflicts">Transfer conflict review</h3>
     <p className="muted">Keeping local records resolves the review while the encrypted bundle remains retained.</p>
+    {!canWrite && <p className="uncertainty" role="status">{loaded ? 'Showing previously loaded conflict details. Resolution is disabled until the connection and write readiness recover.' : 'Conflict resolution is disabled until the connection and write readiness recover.'}</p>}
     {resolution && <div className="receipt" role="status"><strong>{resolution.decision === 'accept_incoming' ? 'Incoming acceptance receipt' : 'Local-resolution receipt'}</strong><span>{resolution.decision === 'accept_incoming' ? `${resolution.imported} imported · ${resolution.duplicates} exact duplicates.` : 'Local records kept; encrypted bundle retained.'}</span><span className="mono">bundle {resolution.bundle_id} · manifest {resolution.manifest_hash}</span></div>}
-    <ErrorMessage error={error} />
+    <ErrorMessage error={error} />{loading && <p role="status">Loading transfer conflicts…</p>}{Boolean(error) && <button onClick={() => void load()}>Retry conflict review</button>}
     {loaded && !items.length && <Empty title="No transfer conflicts" body="No encrypted bundles are waiting for host review." />}
     {items.map(item => {
       const data = item.data
@@ -70,13 +77,13 @@ function TransferConflictReview({ canReview }: { canReview: boolean }) {
         <div className="detail-head"><div><strong>{String(data.state ?? 'needs_review')}</strong><p className="mono">bundle {String(data.bundle_id ?? '')}</p></div><span className="count">{conflicts.length} conflicts · {duplicates.length} duplicates · {deferred.length} deferred</span></div>
         <p>Keeping local records retains the encrypted bundle for audit and review. Accepting incoming accepts the preserved owner revision and deferred evidence only when the server confirms this conflict is eligible.</p>
         {conflicts.map(id => <TransferRecordDiff key={id} id={id} incoming={incoming.find(record => record.id === id)} local={local.find(record => record.id === id)} />)}
-        <div className="actions"><button className="primary" disabled={data.state !== 'needs_review' || Boolean(busy) || !reviewReady} onClick={() => void resolve(item, 'keep_local')}>{busy === item.id ? 'Resolving…' : 'Keep local records'}</button><button disabled={data.state !== 'needs_review' || Boolean(busy) || !reviewReady} onClick={() => void resolve(item, 'accept_incoming')}>Accept incoming revision and deferred evidence</button></div>
+        <div className="actions"><button className="primary" disabled={!canWrite || loading || data.state !== 'needs_review' || Boolean(busy) || !reviewReady} onClick={() => void resolve(item, 'keep_local')}>{busy === item.id ? 'Resolving…' : 'Keep local records'}</button><button disabled={!canWrite || loading || data.state !== 'needs_review' || Boolean(busy) || !reviewReady} onClick={() => void resolve(item, 'accept_incoming')}>Accept incoming revision and deferred evidence</button></div>
       </article>
     })}
   </section>
 }
 
-function Transfer({ role = '', online = true }: { role?: string; online?: boolean }) {
+function Transfer({ role = '', online = true, writeReady = true, onWriteUnavailable = () => undefined, onWriteAvailable = () => undefined }: { role?: string; online?: boolean; writeReady?: boolean; onWriteUnavailable?: () => void; onWriteAvailable?: () => void }) {
   const [peers, setPeers] = useState<{ id: string; name: string; recipient: string; status: 'enrolled' }[]>([])
   const [leads, setLeads] = useState<RecordItem[]>([])
   const [leadTotal, setLeadTotal] = useState(0)
@@ -88,49 +95,59 @@ function Transfer({ role = '', online = true }: { role?: string; online?: boolea
   const [message, setMessage] = useState('')
   const [receipt, setReceipt] = useState<TransferReceipt | null>(null)
   const [error, setError] = useState<unknown>(null)
+  const [loadingLeads, setLoadingLeads] = useState(false), [loadingConnections, setLoadingConnections] = useState(false), [operation, setOperation] = useState('')
   const limit = 100
   const canTransfer = role === 'captain'
+  const canWrite = online && writeReady
   async function loadLeads(page = leadPage) {
+    setLoadingLeads(true)
     try {
       const result = await api.get<{ items?: RecordItem[]; total?: number }>(`/api/records?kind=lead&limit=${limit}&offset=${page * limit}`)
       const next = result.items ?? []
       setLeads(next)
       setLeadTotal(result.total ?? next.length)
-    } catch (err) { setError(err) }
+    } catch (err) { setError(err) } finally { setLoadingLeads(false) }
   }
-  useEffect(() => { void api.get<{ peers: typeof peers }>('/api/connections').then(result => setPeers(result.peers)).catch(setError) }, [])
+  useEffect(() => { setLoadingConnections(true); void api.get<{ peers: typeof peers }>('/api/connections').then(result => setPeers(result.peers)).catch(setError).finally(() => setLoadingConnections(false)) }, [])
   useEffect(() => { void loadLeads() }, [leadPage])
   function toggle(id: string) {
     setSelected(current => current.includes(id) ? current.filter(value => value !== id) : [...current, id])
     setReview(null)
   }
   async function reviewTransfer() {
-    if (!online || !canTransfer) return
+    if (!canWrite || !canTransfer) return
     setReview(null)
     setError(null)
+    setOperation('Reviewing transfer selection…')
     try {
       const result = await api.post<TransferReview>('/api/transfers/preview', { record_ids: selected, recipient_id: recipient })
       setReview(result)
       setMessage('Transfer selection reviewed. Send or save this exact encrypted bundle.')
-    } catch (err) { setError(err) }
+      onWriteAvailable()
+    } catch (err) { if (err instanceof ApiError && err.status === 503) onWriteUnavailable(); setError(err); setOperation('Transfer review failed. Retry the review.') } finally { setOperation('') }
   }
   async function send() {
-    if (!online || !canTransfer || !review) return
+    if (!canWrite || !canTransfer || !review) return
+    setOperation('Sending encrypted transfer…')
     try {
       const result = await api.post<TransferReceipt>('/api/transfers/send', { record_ids: selected, recipient_id: recipient, review_hash: review.review_hash })
       setReceipt(result)
       setMessage(result.status === 'conflict' ? `Conflict: no records imported; bundle ${result.bundle_id} is held for review.` : `Imported receipt for bundle ${result.bundle_id}.`)
+      onWriteAvailable()
     } catch (err) {
+      if (err instanceof ApiError && err.status === 503) onWriteUnavailable()
       if (err instanceof ApiError && err.status === 409) setReview(null)
       setError(err)
-    }
+    } finally { setOperation('') }
   }
   async function exportRecords() {
-    if (!online || !canTransfer || !review) return
+    if (!canWrite || !canTransfer || !review) return
+    setOperation('Saving encrypted transfer…')
     try {
       const response = await fetch('/api/transfers/export', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': api.csrf ?? '' }, body: JSON.stringify({ record_ids: selected, recipient_id: recipient, review_hash: review.review_hash }) })
       if (!response.ok) {
         if (response.status === 409) setReview(null)
+        if (response.status === 503) onWriteUnavailable()
         throw new Error(`Export failed (${response.status})`)
       }
       const url = URL.createObjectURL(await response.blob())
@@ -140,33 +157,36 @@ function Transfer({ role = '', online = true }: { role?: string; online?: boolea
       link.click()
       URL.revokeObjectURL(url)
       setMessage('Encrypted transfer saved locally.')
-    } catch (err) { setError(err) }
+      onWriteAvailable()
+    } catch (err) { if (err instanceof ApiError && err.status === 503) onWriteUnavailable(); setError(err) } finally { setOperation('') }
   }
   async function importFile() {
-    if (!online || !file || !canTransfer) return
+    if (!canWrite || !file || !canTransfer) return
+    setOperation('Importing and reconciling encrypted file…')
     try {
       const form = new FormData()
       form.append('file', file)
       const result = await api.post<TransferReceipt>('/api/transfers/import', form)
       setReceipt(result)
       setMessage(result.status === 'conflict' ? `Conflict: no records imported; bundle ${result.bundle_id} is held for review.` : `Imported receipt for bundle ${result.bundle_id}.`)
-    } catch (err) { setError(err) }
+      onWriteAvailable()
+    } catch (err) { if (err instanceof ApiError && err.status === 503) onWriteUnavailable(); setError(err) } finally { setOperation('') }
   }
   return <section>
     <h2>Encrypted transfer</h2>
     <ErrorMessage error={error} />
     {!canTransfer && <div className="uncertainty" role="status">Captain role is required on this host to send, export, import, or review transfer conflicts.</div>}
-    {message && <div className="notice" role="status">{message}</div>}
+    {message && <div className="notice" role="status">{message}</div>}{operation && <p role="status" aria-live="polite">{operation}</p>}{!writeReady && online && <div className="uncertainty" role="status">SSE is connected, but transfer writes are unavailable until the writer recovers.</div>}
     {receipt && <div className={`receipt ${receipt.status}`} role="status"><strong>{receipt.status}</strong><span>{receipt.status === 'conflict' ? 'No records imported while this bundle is held.' : `${receipt.imported} imported.`} {receipt.duplicates} exact duplicates · {receipt.conflicts.length} conflicts · {receipt.deferred.length} deferred.</span><span className="mono">bundle {receipt.bundle_id} · manifest {receipt.manifest_hash}</span>{receipt.conflicts.length > 0 && <ul aria-label="Conflicting record IDs">{receipt.conflicts.map(id => <li className="mono" key={id}>{id}</li>)}</ul>}{receipt.deferred.length > 0 && <ul aria-label="Deferred record IDs">{receipt.deferred.map(id => <li className="mono" key={id}>{id}</li>)}</ul>}</div>}
     <div className="split"><div className="panel">
-      <label>Peer recipient<select value={recipient} onChange={event => { setRecipient(event.target.value); setReview(null) }}><option value="">Choose an enrolled peer</option>{peers.map(peer => <option key={peer.id} value={peer.id}>{peer.name} · {peer.status} · {peer.recipient}</option>)}</select></label>
-      <fieldset><legend>Eligible leads</legend>{leads.length ? leads.map(lead => <label key={lead.id}><input type="checkbox" checked={selected.includes(lead.id)} onChange={() => toggle(lead.id)} />{String(lead.data.title || lead.data.finding_title || lead.id)}</label>) : <Empty title="No eligible leads" body="Submitted findings will appear here when ready for transfer." />}</fieldset>
+      <label>Peer recipient<select value={recipient} disabled={loadingConnections} onChange={event => { setRecipient(event.target.value); setReview(null) }}><option value="">{loadingConnections ? 'Loading enrolled peers…' : 'Choose an enrolled peer'}</option>{peers.map(peer => <option key={peer.id} value={peer.id}>{peer.name} · {peer.status} · {peer.recipient}</option>)}</select></label>
+      <fieldset><legend>Eligible leads</legend>{loadingLeads && <p role="status">Loading eligible leads…</p>}{leads.length ? leads.map(lead => <label key={lead.id}><input type="checkbox" checked={selected.includes(lead.id)} disabled={!canWrite} onChange={() => toggle(lead.id)} />{String(lead.data.title || lead.data.finding_title || lead.id)}</label>) : !loadingLeads && <Empty title="No eligible leads" body="Submitted findings will appear here when ready for transfer." />}</fieldset>
       <div className="actions"><button disabled={leadPage === 0} onClick={() => setLeadPage(leadPage - 1)}>Previous leads</button><span className="count">{leadPage * limit + leads.length} of {leadTotal}</span><button disabled={(leadPage + 1) * limit >= leadTotal} onClick={() => setLeadPage(leadPage + 1)}>Next leads</button></div>
-      <button disabled={!online || !canTransfer || !recipient || !selected.length} onClick={() => void reviewTransfer()}>Review transfer</button>
+      <button disabled={!canWrite || !canTransfer || !recipient || !selected.length || Boolean(operation)} onClick={() => void reviewTransfer()}>Review transfer</button>
       {review && <div className="receipt" role="status"><strong>Reviewed transfer selection</strong><span>{review.selected_record_ids.length} selected · {review.records.length} total records · {review.files.length} evidence files</span><span>Recipient: {review.recipient.name} at {review.recipient.origin}</span><ul aria-label="Reviewed transfer records">{review.records.map(item => <li key={item.id}><strong>{item.selected ? 'Selected' : 'Dependency'}:</strong> {String(item.data.title ?? item.data.label ?? item.data.filename ?? item.id)} <span className="mono">{item.kind} · {item.revision_id}</span></li>)}</ul></div>}
-      <div className="actions"><button className="primary" disabled={!online || !canTransfer || !review} onClick={() => void send()}>Send selected leads to peer</button><button disabled={!online || !canTransfer || !review} onClick={() => void exportRecords()}>Save encrypted file</button></div>
-    </div><div className="panel"><input aria-label="Encrypted file" disabled={!online} type="file" onChange={event => setFile(event.target.files?.[0] ?? null)} /><button disabled={!online || !canTransfer || !file} onClick={() => void importFile()}>Import and reconcile</button></div></div>
-    <TransferConflictReview canReview={online && canTransfer} />
+      <div className="actions"><button className="primary" disabled={!canWrite || !canTransfer || !review || Boolean(operation)} onClick={() => void send()}>Send selected leads to peer</button><button disabled={!canWrite || !canTransfer || !review || Boolean(operation)} onClick={() => void exportRecords()}>Save encrypted file</button></div>
+    </div><div className="panel"><input aria-label="Encrypted file" disabled={!canWrite || loadingConnections} type="file" onChange={event => setFile(event.target.files?.[0] ?? null)} /><button disabled={!canWrite || !canTransfer || !file || Boolean(operation)} onClick={() => void importFile()}>Import and reconcile</button></div></div>
+    <TransferConflictReview canReview={canTransfer} online={online} canWrite={canWrite} onWriteUnavailable={onWriteUnavailable} onWriteAvailable={onWriteAvailable} />
   </section>
 }
 export { Transfer }

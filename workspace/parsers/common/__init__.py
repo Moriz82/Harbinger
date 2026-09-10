@@ -4,13 +4,14 @@ This package contains no collector or transport code.  Importers receive raw
 bytes from the dispatcher and return the same normalized dictionaries used by
 the original parser.
 """
-import base64
 import io
 import re
 import stat
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 import zipfile
+
+from .harness_validation import parse_harness_json, validate_harness_envelope
 
 
 TRACKS = ('network', 'web', 'linux', 'windows_ad', 'database_service')
@@ -100,4 +101,4 @@ def new_result(raw):
     return dict(assets=[], relationships=[], observations=[], limitations=[], complete=True, quarantined=secret_bearing(raw))
 
 
-__all__ = ['MAX_RECORDS', 'ParseContext', 'TRACKS', 'archive', 'new_result', 'safe_text', 'secret_bearing']
+__all__ = ['MAX_RECORDS', 'ParseContext', 'TRACKS', 'archive', 'new_result', 'parse_harness_json', 'safe_text', 'secret_bearing', 'validate_harness_envelope']

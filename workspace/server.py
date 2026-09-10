@@ -15,10 +15,37 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from . import APP_NAME
 from . import auth, models
-from .store import Store, Conflict, canonical, digest, private
-from .parsers import FORMATS, safe_text, secret_bearing
+from .store import Store, Conflict, canonical, digest, private, utc
+from .parsers import FORMATS, FORMAT_LIMITS, safe_text, secret_bearing
+from .harness_trust import (
+    MAX_HARNESS_BYTES,
+    ORDINARY_ARTIFACT,
+    RESTRICTED_HARNESS_ARTIFACT,
+    classify_harness_artifact,
+    classify_harness_artifact_path,
+    verify_harness_observation,
+)
 from .isolation import run_parser
 from .parser_service import inspect_queue
+
+
+def _harness_trust_preview(trust):
+    """Return the bounded metadata derivative allowed outside restricted storage."""
+    summary = {
+        'kind': 'harness_trust_summary_v1',
+        'trusted': trust['trusted'],
+        'source_id': trust['source_id'],
+        'key_id': trust['key_id'],
+        'profile': trust['profile'],
+        'outcome': trust['outcome'],
+        'envelope_id': trust['envelope_id'],
+        'signed_sha256': trust['signed_sha256'],
+        'observation_sha256': trust['observation_sha256'],
+        'evidence_count': trust['evidence_count'],
+        'evidence_sha256': trust['evidence_sha256'],
+        'original_access': 'restricted',
+    }
+    return canonical(summary)
 
 
 def create_app(root):
@@ -161,6 +188,14 @@ def create_app(root):
             store.blocked = 'Evidence integrity failed. Preserve the workspace and inspect the original artifact.'
             raise RuntimeError(store.blocked) from error
 
+    def restricted_harness_artifact(value, path=None):
+        data = value['data']
+        if (data.get('artifact_class') == RESTRICTED_HARNESS_ARTIFACT
+                or data.get('format') == 'harness_observation_v1'):
+            return True
+        artifact = path or evidence_artifact(value)
+        return classify_harness_artifact_path(artifact) == RESTRICTED_HARNESS_ARTIFACT
+
     def edit_allowed(request, value):
         role = request.state.session['role']
         if value['kind'] not in ('finding', 'draft') or value['data'].get('source_instance'):
@@ -194,6 +229,11 @@ def create_app(root):
     @app.get('/api/session')
     def get_session(request: Request):
         return session_response(request.state.session)
+
+    @app.get('/api/readiness')
+    def readiness():
+        store.require_write_ready()
+        return {'write_ready': True}
 
     @app.post('/api/login')
     def sign_in(body: models.Login, request: Request):
@@ -359,21 +399,52 @@ def create_app(root):
             with os.fdopen(fd, 'wb') as target:
                 while chunk := await file.read(1024 * 1024):
                     size += len(chunk)
-                    if size > 256 * 1024**2 or shutil.disk_usage(store.root).free < 256 * 1024**2:
+                    if size > FORMAT_LIMITS[format] or shutil.disk_usage(store.root).free < 256 * 1024**2:
                         raise HTTPException(413, 'The upload or available storage reached its limit.')
                     target.write(chunk); h.update(chunk)
                 target.flush(); os.fsync(target.fileno())
-            key = f'{format}:{h.hexdigest()}'
+            artifact_sha256 = h.hexdigest()
+            artifact_class = classify_harness_artifact_path(path)
+            submitted_as_harness = format == 'harness_observation_v1'
+            content_is_harness = artifact_class == RESTRICTED_HARNESS_ARTIFACT
+            if submitted_as_harness != content_is_harness:
+                raise HTTPException(422, 'The selected import format does not match the artifact content.')
+            bounded_raw = path.read_bytes() if content_is_harness and size <= MAX_HARNESS_BYTES else None
+            if content_is_harness and bounded_raw is None:
+                raise HTTPException(422, 'The signed harness envelope exceeds its fixed input limit.')
+            harness_trust = verify_harness_observation(store, bounded_raw) if content_is_harness else None
+            key = f'{format}:{artifact_sha256}'
             with store.tx() as c:
+                if harness_trust:
+                    by_envelope = c.execute('SELECT * FROM harness_envelopes WHERE envelope_id=?', (harness_trust['envelope_id'],)).fetchone()
+                    by_observation = c.execute('SELECT * FROM harness_envelopes WHERE observation_id=?', (harness_trust['observation_id'],)).fetchone()
+                    if by_envelope and by_envelope['signed_sha256'] != harness_trust['signed_sha256']:
+                        raise HTTPException(409, 'This harness envelope identifier was reused with different signed content.')
+                    if by_observation and by_observation['observation_sha256'] != harness_trust['observation_sha256']:
+                        raise HTTPException(409, 'This harness observation identifier was reused with different content.')
+                    duplicate = by_envelope or by_observation
+                    if duplicate:
+                        r = store.get(duplicate['upload_id'], c)
+                        store.event(c, actor(request), 'harness.envelope_duplicate', [r['id'], harness_trust['envelope_id']], source_id=harness_trust['source_id'], profile=harness_trust['profile'], outcome=harness_trust['outcome'], signed_sha256=harness_trust['signed_sha256'])
+                        return r
                 previous = c.execute('SELECT record_id FROM imports WHERE key=?', (key,)).fetchone()
                 if previous:
                     r = record(previous[0])
                     store.event(c, actor(request), 'upload.duplicate', [r['id']])
                 else:
-                    data = dict(filename=Path(file.filename or 'upload').name[:200], format=format, status='uploaded', sha256=h.hexdigest(), size=size, artifact_id=id, quarantined=False, limitations=[])
+                    data = dict(filename=Path(file.filename or 'upload').name[:200], format=format, artifact_class=artifact_class, status='uploaded', sha256=artifact_sha256, size=size, artifact_id=id, quarantined=False, limitations=[])
+                    if harness_trust:
+                        data['harness_trust'] = harness_trust
                     r = store.put(c, 'upload', data, actor(request), id)
                     c.execute('INSERT INTO imports VALUES(?,?)', (key, id))
-                    store.event(c, actor(request), 'upload.received', [id], size=size, sha256=h.hexdigest())
+                    if harness_trust:
+                        c.execute(
+                            'INSERT INTO harness_envelopes(envelope_id,observation_id,source_id,signed_sha256,observation_sha256,artifact_sha256,upload_id,status,recorded_at) VALUES(?,?,?,?,?,?,?,?,?)',
+                            (harness_trust['envelope_id'], harness_trust['observation_id'], harness_trust['source_id'], harness_trust['signed_sha256'], harness_trust['observation_sha256'], artifact_sha256, id, 'uploaded', utc()),
+                        )
+                        store.event(c, actor(request), 'harness.envelope_received', [id, harness_trust['envelope_id'], harness_trust['observation_id']], source_id=harness_trust['source_id'], key_id=harness_trust['key_id'], profile=harness_trust['profile'], outcome=harness_trust['outcome'], signed_sha256=harness_trust['signed_sha256'], observation_sha256=harness_trust['observation_sha256'], artifact_sha256=artifact_sha256)
+                    else:
+                        store.event(c, actor(request), 'upload.received', [id], size=size, sha256=artifact_sha256)
                     committed = True
             return r
         finally:
@@ -389,6 +460,18 @@ def create_app(root):
         r = record(id, 'upload')
         if r['data']['status'] in ('merged', 'parsing'):
             raise HTTPException(409, 'This upload is already merged or being parsed.')
+        path = store.root / 'artifacts' / r['data']['artifact_id']
+        private(path)
+        actual_class = classify_harness_artifact_path(path)
+        recorded_class = r['data'].get('artifact_class', RESTRICTED_HARNESS_ARTIFACT if r['data']['format'] == 'harness_observation_v1' else ORDINARY_ARTIFACT)
+        if actual_class != recorded_class:
+            raise HTTPException(409, 'The artifact classification changed after upload.')
+        bounded_raw = path.read_bytes() if actual_class == RESTRICTED_HARNESS_ARTIFACT and r['data']['size'] <= MAX_HARNESS_BYTES else None
+        if actual_class == RESTRICTED_HARNESS_ARTIFACT and bounded_raw is None:
+            raise HTTPException(409, 'The signed harness envelope exceeds its fixed input limit.')
+        harness_trust = verify_harness_observation(store, bounded_raw) if actual_class == RESTRICTED_HARNESS_ARTIFACT else None
+        if harness_trust and harness_trust != r['data'].get('harness_trust'):
+            raise HTTPException(409, 'The harness trust binding changed after upload.')
         with store.tx() as c:
             # Re-read under the writer lock to prevent two parser dispatches.
             current = store.get(id, c)
@@ -397,16 +480,19 @@ def create_app(root):
             r = store.put(c, 'upload', {**r['data'], 'status': 'parsing'}, actor(request), id, r['revision_id'])
             store.event(c, actor(request), 'parser.started', [id], parser=r['data']['format'])
         try:
-            path = store.root / 'artifacts' / r['data']['artifact_id']
-            private(path)
             if hashlib.sha256(path.read_bytes()).hexdigest() != r['data']['sha256']:
                 raise RuntimeError('The source checksum changed. Preserve the workspace for review.')
             preview = await asyncio.to_thread(run_parser, path, r['data']['format'])
+            if harness_trust:
+                preview['harness_trust'] = harness_trust
             data = {**r['data'], 'status': 'quarantined' if preview['quarantined'] else 'preview', 'quarantined': preview['quarantined'], 'limitations': preview['limitations']}
             with store.tx() as c:
                 store.put(c, 'preview', preview, actor(request), id + '-preview', (store.get(id + '-preview', c) or {}).get('revision_id'))
                 r = store.put(c, 'upload', data, actor(request), id, r['revision_id'])
-                store.event(c, actor(request), 'parser.completed', [id], outcome=data['status'], complete=preview['complete'])
+                metadata = {'outcome': data['status'], 'complete': preview['complete']}
+                if harness_trust:
+                    metadata.update(source_id=harness_trust['source_id'], profile=harness_trust['profile'], harness_outcome=harness_trust['outcome'], signed_sha256=harness_trust['signed_sha256'])
+                store.event(c, actor(request), 'parser.completed', [id], **metadata)
             return r
         except Exception:
             with store.tx() as c:
@@ -442,27 +528,51 @@ def create_app(root):
             if not p or p['kind'] != 'preview':
                 raise HTTPException(409, 'Review a successful, non-quarantined preview first.')
             review = reviewed_preview(current, p)['_review']
+            submitted = body.model_dump()
+            binding = {key: submitted[key] for key in ('upload_revision_id', 'preview_revision_id', 'preview_hash')}
             if current['data']['status'] == 'merged':
                 merged_from = current['data'].get('merged_review')
-                if merged_from == body.model_dump():
+                if merged_from == submitted:
                     return current
                 raise Conflict(current)
-            if review != body.model_dump():
+            if review != binding:
                 raise Conflict(current)
             if current['data']['status'] != 'preview' or current['data'].get('quarantined'):
                 raise HTTPException(409, 'Review a successful, non-quarantined preview first.')
-            evidence_artifact(current)
+            restricted_harness = current['data'].get('artifact_class') == RESTRICTED_HARNESS_ARTIFACT or current['data']['format'] == 'harness_observation_v1'
+            if (restricted_harness or not p['data']['complete']) and not body.acknowledged:
+                raise HTTPException(409, 'Acknowledge the reviewed preview and its limitations before merging.')
+            path = evidence_artifact(current)
+            if restricted_harness:
+                try:
+                    trust = verify_harness_observation(store, path.read_bytes())
+                except ValueError as error:
+                    raise HTTPException(409, 'The harness source or signature is no longer trusted.') from error
+                if trust != current['data'].get('harness_trust') or trust != p['data'].get('harness_trust'):
+                    raise HTTPException(409, 'The harness trust binding changed after review.')
             mapping = {a['id']: str(uuid.uuid5(uuid.UUID(id), a['id'])) for a in p['data']['assets']}
             for a in p['data']['assets']:
-                data = {**a, 'source_artifact': id, 'source_locator': a['id']}
+                data = {**a, 'source_locator': a['id']}
+                if not restricted_harness:
+                    data['source_artifact'] = id
                 store.put(c, 'asset', data, actor(request), mapping[a['id']])
             for edge in p['data']['relationships']:
                 if edge['source'] not in mapping or edge['target'] not in mapping:
                     raise ValueError('Relationship has an unknown endpoint')
-                store.put(c, 'relationship', {**edge, 'source': mapping[edge['source']], 'target': mapping[edge['target']], 'source_artifact': id}, actor(request))
+                data = {**edge, 'source': mapping[edge['source']], 'target': mapping[edge['target']]}
+                if not restricted_harness:
+                    data['source_artifact'] = id
+                store.put(c, 'relationship', data, actor(request))
             for o in p['data']['observations']:
-                store.put(c, 'observation', {**o, 'subject': mapping[o['subject']], 'source_artifact': id}, actor(request))
-            r = store.put(c, 'upload', {**current['data'], 'status': 'merged', 'merged_review': body.model_dump()}, actor(request), id, current['revision_id'])
+                data = {**o, 'subject': mapping[o['subject']]}
+                if not restricted_harness:
+                    data['source_artifact'] = id
+                store.put(c, 'observation', data, actor(request))
+            r = store.put(c, 'upload', {**current['data'], 'status': 'merged', 'merged_review': submitted}, actor(request), id, current['revision_id'])
+            if restricted_harness:
+                changed = c.execute("UPDATE harness_envelopes SET status='merged' WHERE upload_id=? AND status='uploaded'", (id,)).rowcount
+                if changed != 1:
+                    raise ValueError('Harness envelope state changed before merge')
             store.event(c, actor(request), 'upload.merged', [id], assets=len(p['data']['assets']), relationships=len(p['data']['relationships']), observations=len(p['data']['observations']))
         return r
 
@@ -470,19 +580,44 @@ def create_app(root):
     def evidence_preview(id: str):
         r = record(id, 'upload')
         path = evidence_artifact(r)
+        def result(text, quarantined, inline_image_media_type=None):
+            return {
+                'text': text,
+                'quarantined': quarantined,
+                'base_revision_id': r['revision_id'],
+                'artifact_sha256': r['data']['sha256'],
+                'inline_image_media_type': inline_image_media_type,
+            }
+        if restricted_harness_artifact(r, path):
+            trust = r['data'].get('harness_trust')
+            if not isinstance(trust, dict) or trust.get('trusted') is not True:
+                return result('This signed harness original is restricted. A verified trust summary is unavailable.', True)
+            return result(_harness_trust_preview(trust), True)
         if r['data'].get('quarantined'):
-            return {'text': 'This evidence is quarantined. Review the restricted original.', 'quarantined': True, 'base_revision_id': r['revision_id'], 'artifact_sha256': r['data']['sha256']}
+            return result('This evidence is quarantined. Review the restricted original.', True)
+        inline_image_media_type = None
+        if r['data'].get('reviewed_for_export'):
+            try:
+                from .evidence_images import identify
+                inline_image_media_type, _extension = identify(path)
+            except ValueError:
+                inline_image_media_type = None
+            except OSError as error:
+                store.blocked = 'Evidence image access failed. Preserve the workspace and inspect the artifact.'
+                raise RuntimeError(store.blocked) from error
         with path.open('rb') as f:
             raw = f.read(65537)
         if secret_bearing(raw) or b'\0' in raw or raw.startswith(b'PK'):
-            return {'text': 'A safe text preview is unavailable. Use the reviewed import view.', 'quarantined': True, 'base_revision_id': r['revision_id'], 'artifact_sha256': r['data']['sha256']}
-        return {'text': safe_text(raw) + ('\n[Preview limit reached]' if len(raw) > 65536 else ''), 'quarantined': False, 'base_revision_id': r['revision_id'], 'artifact_sha256': r['data']['sha256']}
+            return result('A safe text preview is unavailable. Use the reviewed import view.', True, inline_image_media_type)
+        return result(safe_text(raw) + ('\n[Preview limit reached]' if len(raw) > 65536 else ''), False, inline_image_media_type)
 
     @app.get('/api/evidence/{id}/download')
     def download(id: str, request: Request):
         r = record(id, 'upload')
         admin(request)
         path = evidence_artifact(r)
+        if restricted_harness_artifact(r, path):
+            raise HTTPException(409, 'The signed harness original is restricted to trust verification and deduplication.')
         with store.tx() as c:
             store.event(c, actor(request), 'evidence.downloaded', [id], sha256=r['data']['sha256'])
         return FileResponse(path, media_type='application/octet-stream', filename='evidence-' + id + '.bin')
@@ -490,9 +625,11 @@ def create_app(root):
     @app.get('/api/evidence/{id}/render')
     def render_evidence_image(id: str, request: Request):
         r = record(id, 'upload')
+        path = evidence_artifact(r)
+        if restricted_harness_artifact(r, path):
+            raise HTTPException(409, 'The signed harness original cannot be rendered.')
         if r['data'].get('quarantined') or not r['data'].get('reviewed_for_export'):
             raise HTTPException(409, 'A host reviewer must approve this evidence before inline display.')
-        path = evidence_artifact(r)
         try:
             from .evidence_images import identify
             media_type, extension = identify(path)

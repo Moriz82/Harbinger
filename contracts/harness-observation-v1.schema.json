@@ -1,0 +1,440 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cptc-team-workspace:harness-observation:v1",
+  "title": "Reviewed harness observation envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "envelope_id", "engagement_id", "producer", "issued_at", "review", "profile", "execution", "observation", "signature"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "harness_observation_v1"},
+    "envelope_id": {"type": "string", "format": "uuid"},
+    "engagement_id": {"type": "string", "format": "uuid"},
+    "producer": {"$ref": "#/$defs/producer"},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "review": {"$ref": "#/$defs/review"},
+    "profile": {"type": "object"},
+    "execution": {"type": "object"},
+    "observation": {"type": "object"},
+    "signature": {"$ref": "#/$defs/signature"}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "profile": {"$ref": "#/$defs/smb_profile"},
+        "execution": {"$ref": "#/$defs/smb_execution"},
+        "observation": {"$ref": "#/$defs/smb_observation"}
+      }
+    },
+    {
+      "properties": {
+        "profile": {"$ref": "#/$defs/portcast_profile"},
+        "execution": {"$ref": "#/$defs/portcast_execution"},
+        "observation": {"$ref": "#/$defs/portcast_observation"}
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safe_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"},
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "role", "key_id"],
+      "properties": {
+        "source_id": {"type": "string", "format": "uuid"},
+        "role": {"const": "reviewed_broker"},
+        "key_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$"}
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "review_id", "reviewed_at"],
+      "properties": {
+        "status": {"const": "reviewed"},
+        "review_id": {"type": "string", "format": "uuid"},
+        "reviewed_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "encoding", "key_id", "value"],
+      "properties": {
+        "algorithm": {"const": "Ed25519"},
+        "encoding": {"const": "base64"},
+        "key_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$"},
+        "value": {"type": "string", "minLength": 88, "maxLength": 88}
+      }
+    },
+    "identifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "value"],
+      "properties": {
+        "type": {"enum": ["fqdn", "ipv4", "ipv6"]},
+        "value": {"type": "string", "minLength": 1, "maxLength": 255}
+      },
+      "oneOf": [
+        {"properties": {"type": {"const": "fqdn"}, "value": {"format": "hostname"}}},
+        {"properties": {"type": {"const": "ipv4"}, "value": {"format": "ipv4"}}},
+        {"properties": {"type": {"const": "ipv6"}, "value": {"format": "ipv6"}}}
+      ]
+    },
+    "versioned_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "sha256"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"},
+        "version": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "smb_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"const": "cptc11_smb2_security_mode_v1"},
+        "version": {"const": 1}
+      }
+    },
+    "smb_execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "release", "frozen_plan", "target_profile", "action_id", "module", "collector", "reservation"],
+      "properties": {
+        "policy": {"$ref": "#/$defs/versioned_artifact"},
+        "release": {"$ref": "#/$defs/versioned_artifact"},
+        "frozen_plan": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "sha256"],
+          "properties": {
+            "id": {"type": "string", "format": "uuid"},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "target_profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "sha256"],
+          "properties": {
+            "id": {"const": "cptc11_smb2_security_mode_v1"},
+            "version": {"const": 1},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "action_id": {"type": "string", "format": "uuid"},
+        "module": {"$ref": "#/$defs/versioned_artifact"},
+        "collector": {"$ref": "#/$defs/versioned_artifact"},
+        "reservation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "reserved", "consumed"],
+          "properties": {
+            "id": {"type": "string", "format": "uuid"},
+            "reserved": {"$ref": "#/$defs/smb_resource_counters"},
+            "consumed": {"$ref": "#/$defs/smb_resource_counters"}
+          }
+        }
+      }
+    },
+    "smb_resource_counters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tcp_connect_attempts", "udp_datagrams", "protocol_requests", "transmitted_bytes", "received_bytes", "wall_time_ms", "cpu_time_ms", "processes", "output_bytes", "authentication_attempts"],
+      "properties": {
+        "tcp_connect_attempts": {"type": "integer", "minimum": 0, "maximum": 2},
+        "udp_datagrams": {"type": "integer", "minimum": 0, "maximum": 1},
+        "protocol_requests": {"type": "integer", "minimum": 0, "maximum": 2},
+        "transmitted_bytes": {"type": "integer", "minimum": 0, "maximum": 4096},
+        "received_bytes": {"type": "integer", "minimum": 0, "maximum": 16384},
+        "wall_time_ms": {"type": "integer", "minimum": 0, "maximum": 15000},
+        "cpu_time_ms": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "processes": {"type": "integer", "minimum": 0, "maximum": 1},
+        "output_bytes": {"type": "integer", "minimum": 0, "maximum": 16384},
+        "authentication_attempts": {"type": "integer", "minimum": 0, "maximum": 0}
+      }
+    },
+    "smb_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation_id", "observed_at", "outcome", "asset", "detector", "result", "evidence_refs"],
+      "properties": {
+        "observation_id": {"type": "string", "format": "uuid"},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "outcome": {"enum": ["observed", "not_observed", "inconclusive", "unsupported", "error"]},
+        "asset": {"$ref": "#/$defs/smb_asset"},
+        "detector": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version", "deterministic"],
+          "properties": {
+            "name": {"const": "smb2_security_mode"},
+            "version": {"const": 1},
+            "deterministic": {"const": true}
+          }
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["protocol", "port", "security_mode", "dialect"],
+          "properties": {
+            "protocol": {"const": "smb2"},
+            "port": {"const": 445},
+            "security_mode": {"enum": ["signing_required", "signing_enabled", "signing_disabled", "unknown"]},
+            "dialect": {"enum": ["SMB 2.0.2", "SMB 2.1", "SMB 3.0", "SMB 3.0.2", "SMB 3.1.1", "unknown"]}
+          }
+        },
+        "evidence_refs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/smb_evidence_ref"}
+        }
+      }
+    },
+    "smb_asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_key", "label", "kind", "track", "identifiers", "context"],
+      "properties": {
+        "asset_key": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "label": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "kind": {"const": "host"},
+        "track": {"const": "windows_ad"},
+        "identifiers": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/identifier"}},
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["domain", "role", "segment", "source_locator"],
+          "properties": {
+            "domain": {"type": "string", "maxLength": 255},
+            "role": {"type": "string", "maxLength": 128},
+            "segment": {"type": "string", "maxLength": 255},
+            "source_locator": {"type": "string", "maxLength": 2048}
+          }
+        }
+      }
+    },
+    "smb_evidence_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "sha256", "size", "media_type"],
+      "properties": {
+        "evidence_id": {"type": "string", "format": "uuid"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"type": "integer", "minimum": 0, "maximum": 16777216},
+        "media_type": {"type": "string", "minLength": 1, "maxLength": 127, "pattern": "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"}
+      }
+    },
+    "named_hash": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sha256"],
+      "properties": {
+        "id": {"$ref": "#/$defs/safe_id"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "portcast_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"const": "web.http_jellyfin_public_identity"},
+        "version": {"const": 1}
+      }
+    },
+    "portcast_execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_engagement_id", "policy", "release", "frozen_plan", "target_profile", "action_id", "module", "collector", "parser", "reservation"],
+      "properties": {
+        "source_engagement_id": {"$ref": "#/$defs/safe_id"},
+        "policy": {"$ref": "#/$defs/named_hash"},
+        "release": {"$ref": "#/$defs/named_hash"},
+        "frozen_plan": {"$ref": "#/$defs/named_hash"},
+        "target_profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "target_id", "catalog_sha256", "profile_sha256", "operation_sha256", "runtime_pinset_sha256"],
+          "properties": {
+            "id": {"const": "web.http_jellyfin_public_identity"},
+            "version": {"const": 1},
+            "target_id": {"const": "cptc11-prod-portcast"},
+            "catalog_sha256": {"const": "d37bc4a0ba5368e02306f52cce5927d5a5db6e7dee90dda0cc0ee3d243e66113"},
+            "profile_sha256": {"const": "2acbea838777e029076eb93eb039170f806713d3c8fe9724dacb7827ed2322a3"},
+            "operation_sha256": {"const": "e60c94321ac232504c22b1d55e9702a2526f9a0022284b6d9ef7b2c980943fe6"},
+            "runtime_pinset_sha256": {"const": "9bcaeaa02a0c9f52b1b32c4259a35043b9dd0caec55f6fec150ec6f5a722df16"}
+          }
+        },
+        "action_id": {"$ref": "#/$defs/safe_id"},
+        "module": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "sha256"],
+          "properties": {
+            "id": {"const": "web.portcast_identity"},
+            "version": {"const": "1.0.0"},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "collector": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "worker_sha256"],
+          "properties": {
+            "id": {"const": "portcast-http-identity-v1"},
+            "version": {"const": 1},
+            "worker_sha256": {"const": "472620e6112b00882f480ea4a0209e8dcdab9e0c54ba98ae2bef86c07342f400"}
+          }
+        },
+        "parser": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "sha256"],
+          "properties": {
+            "id": {"const": "portcast.public_identity.v1"},
+            "version": {"const": 1},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "reservation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "reserved", "consumed"],
+          "properties": {
+            "id": {"$ref": "#/$defs/safe_id"},
+            "reserved": {"$ref": "#/$defs/portcast_reserved"},
+            "consumed": {"$ref": "#/$defs/portcast_consumed"}
+          }
+        }
+      }
+    },
+    "portcast_reserved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tcp_connects", "udp_datagrams", "tls_handshakes", "protocol_requests", "tx_bytes", "rx_bytes", "capture_bytes", "authentication_attempts"],
+      "properties": {
+        "tcp_connects": {"const": 1},
+        "udp_datagrams": {"const": 0},
+        "tls_handshakes": {"const": 0},
+        "protocol_requests": {"const": 1},
+        "tx_bytes": {"const": 256},
+        "rx_bytes": {"const": 8192},
+        "capture_bytes": {"const": 8192},
+        "authentication_attempts": {"const": 0}
+      }
+    },
+    "portcast_consumed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tcp_connects", "udp_datagrams", "tls_handshakes", "protocol_requests", "tx_bytes", "rx_bytes", "capture_bytes", "authentication_attempts"],
+      "properties": {
+        "tcp_connects": {"const": 1},
+        "udp_datagrams": {"const": 0},
+        "tls_handshakes": {"const": 0},
+        "protocol_requests": {"const": 1},
+        "tx_bytes": {"const": 103},
+        "rx_bytes": {"type": "integer", "minimum": 1, "maximum": 8192},
+        "capture_bytes": {"type": "integer", "minimum": 1, "maximum": 8192},
+        "authentication_attempts": {"const": 0}
+      }
+    },
+    "portcast_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation_id", "observed_at", "outcome", "asset", "detector", "result", "evidence_refs"],
+      "properties": {
+        "observation_id": {"type": "string", "format": "uuid"},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "outcome": {"const": "observed"},
+        "asset": {"$ref": "#/$defs/portcast_asset"},
+        "detector": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version", "deterministic"],
+          "properties": {
+            "name": {"const": "portcast_public_identity"},
+            "version": {"const": 1},
+            "deterministic": {"const": true}
+          }
+        },
+        "result": {"$ref": "#/$defs/portcast_result"},
+        "evidence_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {"$ref": "#/$defs/portcast_evidence_ref"}
+        }
+      }
+    },
+    "portcast_asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_key", "label", "kind", "track", "identifiers", "context"],
+      "properties": {
+        "asset_key": {"const": "service:10.0.1.30:8096/jellyfin"},
+        "label": {"type": "string", "minLength": 1, "maxLength": 200},
+        "kind": {"const": "service"},
+        "track": {"const": "web"},
+        "identifiers": {
+          "type": "array",
+          "prefixItems": [{
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "value"],
+            "properties": {
+              "type": {"const": "ipv4"},
+              "value": {"const": "10.0.1.30"}
+            }
+          }],
+          "minItems": 1,
+          "maxItems": 1
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target_id", "endpoint"],
+          "properties": {
+            "target_id": {"const": "cptc11-prod-portcast"},
+            "endpoint": {"const": "http://10.0.1.30:8096/System/Info/Public"}
+          }
+        }
+      }
+    },
+    "portcast_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "state", "component_id", "ecosystem", "product", "version", "provenance", "protocol", "port", "vulnerability_assessment"],
+      "properties": {
+        "check_id": {"const": "portcast_public_identity"},
+        "state": {"const": "candidate"},
+        "component_id": {"const": "service:10.0.1.30:8096/jellyfin"},
+        "ecosystem": {"const": "semver"},
+        "product": {"const": "Jellyfin Server"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[0-9]+(?:\\.[0-9A-Za-z-]+){1,3}(?:[+.-][0-9A-Za-z.-]+)?$"},
+        "provenance": {"const": "banner"},
+        "protocol": {"const": "http"},
+        "port": {"const": 8096},
+        "vulnerability_assessment": {"const": "not_performed"}
+      }
+    },
+    "portcast_evidence_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "sha256", "size", "media_type", "classification", "availability"],
+      "properties": {
+        "evidence_id": {"$ref": "#/$defs/safe_id"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"type": "integer", "minimum": 1, "maximum": 8192},
+        "media_type": {"const": "application/http"},
+        "classification": {"const": "client_confidential_human_only"},
+        "availability": {"const": "source_harness_encrypted_only"}
+      }
+    }
+  }
+}

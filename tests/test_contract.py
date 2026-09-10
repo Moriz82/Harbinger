@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+import tomllib
 import uuid
 import pytest
 
@@ -28,6 +29,13 @@ def test_checked_in_contract_hash_and_validation():
     assert hashlib.sha256(raw).hexdigest() == CONTRACT_SHA256
     assert (path.parent / "CONTRACT_SHA256").read_text().strip() == CONTRACT_SHA256
     validate_manifest(sample_manifest())
+
+
+def test_wheel_includes_the_pinned_contract_directory():
+    project = Path(__file__).parents[1]
+    config = tomllib.loads((project / "pyproject.toml").read_text())
+    force_include = config["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+    assert force_include["contracts"] == "contracts"
 
 
 def test_contract_rejects_unexpected_fields_and_kinds():

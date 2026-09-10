@@ -24,6 +24,19 @@ import httpx
 from .models import EvidenceApproval, Export, Finding, Draft, Question, ConflictResolution, MergeReview, TransferSelection
 from .store import Conflict, canonical, digest, private, utc
 from .parsers import FORMATS, TRACKS, secret_bearing
+from .harness_trust import (
+    CONTRACT_PATH as HARNESS_CONTRACT_PATH,
+    HARNESS_CONTRACT_SHA256,
+    MAX_HARNESS_BYTES,
+    ORDINARY_ARTIFACT,
+    PORTCAST_PROFILE,
+    RESTRICTED_HARNESS_ARTIFACT,
+    SMB_PROFILE,
+    classify_harness_artifact,
+    classify_harness_artifact_path,
+    portcast_replay_id,
+)
+from .parsers.common.harness_validation import CLOCK_FUTURE_TOLERANCE, parse_harness_timestamp
 from .origins import exact_origin
 
 KINDS = {'asset', 'relationship', 'observation', 'finding', 'lead', 'draft', 'upload', 'question', 'comment'}
@@ -77,6 +90,50 @@ def _shape(data, required, optional=()):
         _uuid(data[field], field)
 
 
+def _validate_harness_fragment(name, value):
+    contract = _load_harness_contract()
+    validator = Draft202012Validator({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$ref": f"#/$defs/{name}",
+        "$defs": contract["$defs"],
+    }, format_checker=FormatChecker())
+    try:
+        validator.validate(value)
+    except Exception as error:
+        raise ValueError("Invalid harness metadata") from error
+
+
+def _load_harness_contract():
+    try:
+        raw = HARNESS_CONTRACT_PATH.read_bytes()
+        expected = (HARNESS_CONTRACT_PATH.parent / "HARNESS_CONTRACT_SHA256").read_text().strip()
+        if expected != HARNESS_CONTRACT_SHA256 or hashlib.sha256(raw).hexdigest() != HARNESS_CONTRACT_SHA256:
+            raise ValueError("Harness contract hash does not match this release")
+        contract = json.loads(raw)
+        Draft202012Validator.check_schema(contract)
+        return contract
+    except ValueError:
+        raise
+    except Exception as error:
+        raise ValueError("Invalid harness metadata") from error
+
+
+def _validate_harness_trust(value):
+    required = {'trusted', 'source_id', 'key_id', 'profile', 'outcome', 'envelope_id', 'observation_id', 'signed_sha256', 'observation_sha256', 'evidence_count', 'evidence_sha256'}
+    if not isinstance(value, dict) or set(value) != required or value['trusted'] is not True or value['profile'] not in {SMB_PROFILE, PORTCAST_PROFILE}:
+        raise ValueError('Invalid harness trust metadata')
+    for field in ('source_id', 'envelope_id', 'observation_id'):
+        _uuid(value[field], field)
+    if (not isinstance(value['key_id'], str) or not re.fullmatch(r'[A-Za-z0-9._:-]{1,128}', value['key_id'])
+            or value['outcome'] not in {'observed', 'not_observed', 'inconclusive', 'unsupported', 'error'}
+            or type(value['evidence_count']) is not int or not 0 <= value['evidence_count'] <= 32
+            or not isinstance(value['evidence_sha256'], list) or len(value['evidence_sha256']) != value['evidence_count']):
+        raise ValueError('Invalid harness trust fields')
+    for checksum in (value['signed_sha256'], value['observation_sha256'], *value['evidence_sha256']):
+        if not isinstance(checksum, str) or not re.fullmatch(r'[0-9a-f]{64}', checksum):
+            raise ValueError('Invalid harness trust hash')
+
+
 def validate_record_data(kind, data):
     """Validate the typed record before it crosses or enters a host boundary."""
     if not isinstance(data, dict):
@@ -87,6 +144,31 @@ def validate_record_data(kind, data):
             raise ValueError('Invalid asset record')
         if 'data' in data and not isinstance(data['data'], dict):
             raise ValueError('Invalid asset facts')
+        facts = data.get('data', {})
+        if 'asset_key' in facts:
+            context = facts.get('context')
+            identifiers = facts.get('identifiers')
+            if (set(facts) != {'asset_key', 'identifiers', 'context'} or not isinstance(context, dict)
+                    or not isinstance(identifiers, list) or len(identifiers) > 8):
+                raise ValueError('Invalid harness asset metadata')
+            if set(context) == {'domain', 'role', 'segment', 'source_locator'}:
+                if (not isinstance(facts['asset_key'], str) or not 1 <= len(facts['asset_key']) <= 2048
+                        or any(not isinstance(context[field], str) for field in context)):
+                    raise ValueError('Invalid harness asset metadata')
+            else:
+                _validate_harness_fragment('portcast_asset', {
+                    'asset_key': facts['asset_key'],
+                    'label': data['label'],
+                    'kind': data['kind'],
+                    'track': data['track'],
+                    'identifiers': identifiers,
+                    'context': context,
+                })
+            for identifier in identifiers:
+                if (not isinstance(identifier, dict) or set(identifier) != {'type', 'value'}
+                        or identifier.get('type') not in {'fqdn', 'ipv4', 'ipv6'}
+                        or not isinstance(identifier.get('value'), str) or not 1 <= len(identifier['value']) <= 255):
+                    raise ValueError('Invalid harness asset identifier')
     elif kind == 'relationship':
         _shape(data, {'source', 'target', 'label'}, {'source_artifact'})
         _uuid(data['source'], 'source'); _uuid(data['target'], 'target')
@@ -97,6 +179,60 @@ def validate_record_data(kind, data):
         _uuid(data['subject'], 'subject')
         if not isinstance(data['summary'], str) or len(data['summary']) > 4096 or not isinstance(data['location'], str) or len(data['location']) > 4096 or not isinstance(data['facts'], dict):
             raise ValueError('Invalid observation record')
+        attestation = data['facts'].get('harness_attestation')
+        if attestation is not None:
+            _load_harness_contract()
+            base = {'schema', 'envelope_id', 'observation_id', 'source_id', 'key_id', 'profile', 'review_id', 'reviewed_at', 'observed_at'}
+            if not isinstance(attestation, dict) or attestation.get('schema') != 'harness_observation_v1' or attestation.get('profile') not in {SMB_PROFILE, PORTCAST_PROFILE}:
+                raise ValueError('Invalid harness attestation metadata')
+            required = base | ({'execution'} if attestation['profile'] == PORTCAST_PROFILE else set())
+            if set(attestation) != required:
+                raise ValueError('Invalid harness attestation metadata')
+            for field in ('envelope_id', 'observation_id', 'source_id', 'review_id'):
+                _uuid(attestation[field], field)
+            if not isinstance(attestation['key_id'], str) or not re.fullmatch(r'[A-Za-z0-9._:-]{1,128}', attestation['key_id']):
+                raise ValueError('Invalid harness attestation key')
+            reviewed_at = parse_harness_timestamp(attestation['reviewed_at'])
+            observed_at = parse_harness_timestamp(attestation['observed_at'])
+            if observed_at > reviewed_at:
+                raise ValueError('Invalid harness attestation timestamp order')
+            if any(item > datetime.now(timezone.utc) + CLOCK_FUTURE_TOLERANCE for item in (reviewed_at, observed_at)):
+                raise ValueError('Harness attestation timestamp is too far in the future')
+            if set(data['facts']) != {'outcome', 'detector', 'result', 'evidence_refs', 'harness_attestation'}:
+                raise ValueError('Invalid harness observation fields')
+            result = data['facts'].get('result')
+            detector = data['facts'].get('detector')
+            evidence = data['facts'].get('evidence_refs')
+            if attestation['profile'] == SMB_PROFILE:
+                if (data['facts'].get('outcome') not in {'observed', 'not_observed', 'inconclusive', 'unsupported', 'error'}
+                        or not isinstance(detector, dict) or detector != {'name': 'smb2_security_mode', 'version': 1, 'deterministic': True}
+                        or not isinstance(result, dict) or set(result) != {'protocol', 'port', 'security_mode', 'dialect'} or result.get('protocol') != 'smb2' or result.get('port') != 445
+                        or result.get('security_mode') not in {'signing_required', 'signing_enabled', 'signing_disabled', 'unknown'}
+                        or result.get('dialect') not in {'SMB 2.0.2', 'SMB 2.1', 'SMB 3.0', 'SMB 3.0.2', 'SMB 3.1.1', 'unknown'}
+                        or not isinstance(evidence, list) or len(evidence) > 32):
+                    raise ValueError('Invalid harness evidence reference')
+                for ref in evidence:
+                    _validate_harness_fragment('smb_evidence_ref', ref)
+            else:
+                if data['facts'].get('outcome') != 'observed' or detector != {'name': 'portcast_public_identity', 'version': 1, 'deterministic': True}:
+                    raise ValueError('Invalid PortCast observation metadata')
+                _validate_harness_fragment('portcast_execution', attestation['execution'])
+                _validate_harness_fragment('portcast_result', result)
+                if not isinstance(evidence, list) or len(evidence) != 1:
+                    raise ValueError('Invalid PortCast evidence metadata')
+                _validate_harness_fragment('portcast_evidence_ref', evidence[0])
+                consumed = attestation['execution']['reservation']['consumed']
+                if consumed['rx_bytes'] != consumed['capture_bytes'] or consumed['capture_bytes'] != evidence[0]['size']:
+                    raise ValueError('Invalid PortCast wire receipt')
+                replay_value = {
+                    'profile': {'name': PORTCAST_PROFILE},
+                    'execution': attestation['execution'],
+                    'observation': {'result': result, 'evidence_refs': evidence},
+                }
+                if attestation['observation_id'] != portcast_replay_id(replay_value):
+                    raise ValueError('Invalid PortCast replay identity')
+            if sum(ref['size'] for ref in evidence) > 256 * 1024**2:
+                raise ValueError('Harness evidence references exceed the aggregate limit')
     elif kind == 'finding':
         local = {key: value for key, value in data.items() if key not in PROVENANCE}
         Finding.model_validate(local)
@@ -109,7 +245,12 @@ def validate_record_data(kind, data):
     elif kind == 'draft':
         Draft.model_validate({key: value for key, value in data.items() if key not in PROVENANCE})
     elif kind == 'upload':
-        _shape(data, {'filename', 'format', 'status', 'sha256', 'size', 'artifact_id', 'quarantined', 'limitations'}, {'reviewed_for_export', 'merged_review'})
+        _shape(data, {'filename', 'format', 'status', 'sha256', 'size', 'artifact_id', 'quarantined', 'limitations'}, {'reviewed_for_export', 'merged_review', 'harness_trust', 'artifact_class'})
+        artifact_class = data.get('artifact_class', RESTRICTED_HARNESS_ARTIFACT if data.get('format') == 'harness_observation_v1' else ORDINARY_ARTIFACT)
+        if artifact_class not in {ORDINARY_ARTIFACT, RESTRICTED_HARNESS_ARTIFACT}:
+            raise ValueError('Invalid artifact classification')
+        if artifact_class == RESTRICTED_HARNESS_ARTIFACT or data.get('format') == 'harness_observation_v1':
+            raise ValueError('The signed harness original is restricted and cannot enter a transfer bundle')
         if not isinstance(data['filename'], str) or not 0 < len(data['filename']) <= 200 or data['format'] not in FORMATS or data['status'] not in {'preview', 'merged'}:
             raise ValueError('Invalid transferable upload state')
         if not isinstance(data['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', data['sha256']) or type(data['size']) is not int or not 0 <= data['size'] <= MAX_BUNDLE:
@@ -117,6 +258,8 @@ def validate_record_data(kind, data):
         _uuid(data['artifact_id'], 'artifact_id')
         if 'merged_review' in data:
             MergeReview.model_validate(data['merged_review'])
+        if 'harness_trust' in data:
+            raise ValueError('Harness trust metadata cannot be attached to transferable raw evidence')
         if data['quarantined'] is not False or data.get('reviewed_for_export') is not True or not isinstance(data['limitations'], list) or any(not isinstance(item, str) or len(item) > 4096 for item in data['limitations']):
             raise ValueError('Upload was not admitted for transfer')
     elif kind == 'question':
@@ -408,6 +551,8 @@ def _transfer_snapshot(store, ids, recipient_id, connection):
         if not r or r['kind'] not in KINDS or len(records) >= 1000:
             raise ValueError('Unsupported or excessive transfer selection')
         d = r['data']
+        if r['kind'] == 'upload' and (d.get('artifact_class') == RESTRICTED_HARNESS_ARTIFACT or d.get('format') == 'harness_observation_v1'):
+            raise ValueError('The signed harness original is restricted and cannot enter a transfer bundle')
         validate_record_data(r['kind'], d)
         kind, _, source_instance, _ = record_identity(r, config['instance_id'])
         if source_instance == config['instance_id']:
@@ -437,6 +582,8 @@ def _transfer_snapshot(store, ids, recipient_id, connection):
             raw = path.read_bytes()
             if hashlib.sha256(raw).hexdigest() != d['sha256'] or secret_bearing(raw):
                 raise ValueError('Artifact changed or requires secret review')
+            if classify_harness_artifact(raw) == RESTRICTED_HARNESS_ARTIFACT:
+                raise ValueError('The signed harness original is restricted and cannot enter a transfer bundle')
             files[id] = raw
     ordered_records = [records[id] for id in sorted(records)]
     file_manifest = [
@@ -719,6 +866,8 @@ def open_bundle(store, encrypted, actor, *, inspect_only=False):
             body = z.read('evidence/' + id)
             if len(body) != f['size'] or hashlib.sha256(body).hexdigest() != f['sha256'] or secret_bearing(body):
                 raise ValueError('Evidence failed integrity or secret review')
+            if classify_harness_artifact(body) == RESTRICTED_HARNESS_ARTIFACT:
+                raise ValueError('The signed harness original is restricted and cannot enter a transfer bundle')
             contents[id] = body
         ids = set()
         for r in m['records']:
@@ -1040,6 +1189,8 @@ def routes(app, store, actor, admin, record):
             r = store.get(id, c)
             if not r or r['kind'] != 'upload':
                 raise HTTPException(404, 'The record was not found.')
+            if r['data'].get('artifact_class') == RESTRICTED_HARNESS_ARTIFACT or r['data'].get('format') == 'harness_observation_v1':
+                raise HTTPException(409, 'The signed harness original is restricted to trust verification and deduplication.')
             if r['revision_id'] != body.base_revision_id or r['data']['sha256'] != body.artifact_sha256:
                 raise Conflict(r)
             if r['data'].get('quarantined') or r['data']['status'] not in ('preview', 'merged'):
@@ -1058,6 +1209,8 @@ def routes(app, store, actor, admin, record):
             except Exception as error:
                 store.blocked = 'Evidence integrity failed. Preserve the workspace and inspect the original artifact.'
                 raise RuntimeError(store.blocked) from error
+            if classify_harness_artifact_path(path) == RESTRICTED_HARNESS_ARTIFACT:
+                raise HTTPException(409, 'The signed harness original is restricted to trust verification and deduplication.')
             r = store.put(c, 'upload', {**r['data'], 'reviewed_for_export': True}, actor(request), id, r['revision_id'])
             store.event(c, actor(request), 'evidence.export_reviewed', [id], sha256=r['data']['sha256'])
         return r

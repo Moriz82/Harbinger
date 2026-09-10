@@ -55,9 +55,27 @@ The receiving host admits only a request signed by its enrolled peer. The signat
 
 If the LAN path fails, select **Export encrypted bundle**. Move the `.age` file through the approved method. In Merlin, select **Import encrypted bundle**. Import is idempotent. Do not transfer a SQLite database.
 
+## Enroll a reviewed harness source
+
+Stop Harbinger. Receive the public `harness_source` card through the approved team channel and compare its printed SHA-256 fingerprint through a separate channel. Then run:
+
+```sh
+.venv/bin/harbinger --workspace state harness-enroll SOURCE-CARD.json --fingerprint VERIFIED-FINGERPRINT
+```
+
+Restart Harbinger and choose `harness_observation_v1` on Imports. Review the source, key, profile, outcome, envelope and observation hashes, asset context, and evidence-reference metadata. Harbinger also verifies that the signed policy, release, frozen plan, target profile, action, module, collector, reservation, and resource counters satisfy the pinned contract. Check the acknowledgement before merge. To revoke a source, stop Harbinger and run:
+
+```sh
+.venv/bin/harbinger --workspace state harness-revoke SOURCE-UUID
+```
+
+An identical card enrollment and identical envelope import are idempotent. Changed content under an existing source, envelope, or observation identifier is rejected. Rotate a key with a new source identifier and separately verified source card; the old enrollment and revocation remain in the database.
+
+The signed original remains restricted to verification, replay detection, and audit integrity. The Evidence page shows a generated metadata-only trust summary. The download, export-approval, and transfer-bundle paths reject the raw signed envelope. Transfer the normalized observation record when the team needs its bounded attestation metadata.
+
 ## Connection loss
 
-The browser shows the last successful sync time. It keeps the loaded view and unsaved text in memory. It disables server writes until the event connection returns. Save urgent text to a file in the approved encrypted workspace. The browser does not store client prose in local storage.
+The browser shows the last successful sync time. It keeps the loaded view and unsaved text in memory. It disables server writes after connection loss or a refused mutation. An event-stream reconnect does not enable writes by itself; the browser first checks the authenticated `/api/readiness` writer gate. Failed readiness checks keep writes disabled. Save urgent text to a file in the approved encrypted workspace. The browser does not store client prose in local storage.
 
 ## Back up and restore
 

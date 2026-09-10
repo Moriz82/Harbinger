@@ -21,6 +21,7 @@ let fetchMock: ReturnType<typeof vi.fn>
 
 function baseFetch(path: string, init?: RequestInit) {
   if (path === '/api/session') return response(session)
+  if (path === '/api/readiness') return response({ write_ready: true })
   if (path.startsWith('/api/graph')) return response({ nodes: [{ id: asset.id, label: asset.label, kind: asset.kind, track: asset.track }], edges: [], total_nodes: 1, total_edges: 0 })
   if (path.startsWith('/api/assets')) return response({ items: [asset], total: 1 })
   if (path === '/api/events') return response('')
@@ -63,7 +64,8 @@ describe('Harbinger UI contract', () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => { const path = String(input); if (path.startsWith('/api/graph')) return response({ detail: 'graph unavailable' }, 503); return baseFetch(path) })
     render(<App />)
     expect(await screen.findByText('Relationship map unavailable.')).toBeInTheDocument()
-    const row = screen.getByText('portal.example').closest('tr')!
+    const assetTable = screen.getByRole('table', { name: 'Imported assets' })
+    const row = within(assetTable).getByText('portal.example').closest('tr')!
     fireEvent.click(row)
     expect(row).toHaveClass('selected')
     expect(screen.getByText('portal.example')).toBeInTheDocument()
@@ -91,7 +93,7 @@ describe('Harbinger UI contract', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByRole('alert')
     expect(screen.queryByText('Saved revision is current.')).not.toBeInTheDocument()
-    expect(screen.getByText('Unsaved changes · Save before review or navigation.')).toBeInTheDocument()
+    expect(screen.getByText('Not saved · server writes are unavailable. Keep editing locally or save a draft file.')).toBeInTheDocument()
   })
 
   it('preserves local and server versions on a stale finding revision', async () => {
@@ -120,6 +122,32 @@ describe('Harbinger UI contract', () => {
     view.rerender(<Findings session={session} refreshKey={1} onDirty={() => undefined} />)
     await waitFor(() => expect(screen.getByLabelText('Observation')).toHaveValue('Remote revision R2'))
     expect(screen.getByText('Saved revision is current.')).toBeInTheDocument()
+  })
+
+  it('keeps saved-state wording truthful while server writes are unavailable', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === '/api/records?kind=finding') return response({ items: [finding], total: 1 })
+      return baseFetch(path)
+    })
+    render(<Findings session={session} refreshKey={0} onDirty={() => undefined} writeReady={false} />)
+    expect(await screen.findByLabelText('Observation')).toHaveValue('Server observation')
+    expect(screen.getByText('Saved revision retained. Server writes are unavailable.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  })
+
+  it('offers the draft-file path for unsaved edits while server writes are unavailable', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === '/api/records?kind=finding') return response({ items: [finding], total: 1 })
+      return baseFetch(path)
+    })
+    render(<Findings session={session} refreshKey={0} onDirty={() => undefined} writeReady={false} />)
+    const observation = await screen.findByLabelText('Observation')
+    fireEvent.change(observation, { target: { value: 'Unsaved local observation' } })
+    expect(screen.getByText('Not saved · server writes are unavailable. Keep editing locally or save a draft file.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Save draft file' })).toBeEnabled()
   })
 
   it('keeps local finding edits and labels the server change after refresh', async () => {
@@ -289,7 +317,8 @@ describe('Harbinger UI contract', () => {
     })
     render(<App />)
     expect(await screen.findByText('Showing 1 of 101 assets', { exact: false })).toBeInTheDocument()
-    const row = screen.getByText('portal.example').closest('tr')!
+    const assetTable = screen.getByRole('table', { name: 'Imported assets' })
+    const row = within(assetTable).getByText('portal.example').closest('tr')!
     fireEvent.keyDown(row, { key: 'Enter' })
     expect(row).toHaveClass('selected')
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))

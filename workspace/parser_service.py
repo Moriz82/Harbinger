@@ -11,7 +11,7 @@ import sys
 import time
 import uuid
 from contextlib import contextmanager
-from .parsers import FORMATS
+from .parsers import FORMATS, FORMAT_LIMITS
 
 STOP = False
 QUEUE_SCAN_LIMIT = 4096
@@ -276,7 +276,7 @@ def child(input_path, output_path, format):
     limits()
     from .parsers import parse
     input_path = Path(input_path)
-    raw = _read_bounded_path(input_path, QUEUE_FILE_LIMITS['input'])
+    raw = _read_bounded_path(input_path, FORMAT_LIMITS[format])
     result = parse(raw, format)
     encoded = json.dumps(result, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()
     if len(encoded) > 128 * 1024**2:
@@ -313,7 +313,7 @@ def serve(queue):
                 uuid.UUID(job)
                 os.replace(request_name, running_name, src_dir_fd=queue_fd, dst_dir_fd=queue_fd)
                 request = json.loads(_read_queue_file_at(queue_fd, running_name, QUEUE_FILE_LIMITS['running']))
-                if set(request) != {'schema_version', 'job_id', 'format', 'sha256', 'size'} or request['schema_version'] != 1 or request['job_id'] != job or request['format'] not in FORMATS or type(request['size']) is not int or not 0 <= request['size'] <= 256 * 1024**2:
+                if set(request) != {'schema_version', 'job_id', 'format', 'sha256', 'size'} or request['schema_version'] != 1 or request['job_id'] != job or request['format'] not in FORMATS or type(request['size']) is not int or not 0 <= request['size'] <= FORMAT_LIMITS[request['format']]:
                     raise ValueError('Invalid job request')
                 input_name = f'{job}.input'
                 digest, source = _hash_queue_file_at(queue_fd, input_name, QUEUE_FILE_LIMITS['input'])

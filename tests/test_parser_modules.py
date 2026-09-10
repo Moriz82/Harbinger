@@ -1,5 +1,6 @@
 """Focused coverage for parser dispatch and importer documentation."""
 import importlib
+import base64
 import json
 from pathlib import Path
 
@@ -20,6 +21,36 @@ INPUTS = {
     'winpeas_text': b'winPEAS synthetic\n[+] Operating system\n',
     'bloodhound': json.dumps({'meta': {'version': 5, 'type': 'groups', 'count': 1}, 'data': [{'ObjectIdentifier': 'S-1-5-21-1', 'Properties': {'name': 'GROUP'}}]}).encode(),
     'manual_json': json.dumps({'schema_version': 1, 'assets': [{'id': 'host', 'label': 'Host', 'track': 'linux'}], 'observations': [], 'relationships': []}).encode(),
+    'harness_observation_v1': json.dumps({
+        'schema_version': 1, 'kind': 'harness_observation_v1',
+        'envelope_id': '00000000-0000-4000-8000-000000000010',
+        'engagement_id': '00000000-0000-4000-8000-000000000001',
+        'producer': {'source_id': '00000000-0000-4000-8000-000000000011', 'role': 'reviewed_broker', 'key_id': 'synthetic-key'},
+        'issued_at': '2026-09-09T12:00:00.000000Z',
+        'review': {'status': 'reviewed', 'review_id': '00000000-0000-4000-8000-000000000012', 'reviewed_at': '2026-09-09T11:59:00.000000Z'},
+        'profile': {'name': 'cptc11_smb2_security_mode_v1', 'version': 1},
+        'execution': {
+            'policy': {'id': 'cptc11.readonly', 'version': 3, 'sha256': '1' * 64},
+            'release': {'id': 'cptc-harness', 'version': 7, 'sha256': '2' * 64},
+            'frozen_plan': {'id': '00000000-0000-4000-8000-000000000014', 'sha256': '3' * 64},
+            'target_profile': {'id': 'cptc11_smb2_security_mode_v1', 'version': 1, 'sha256': '4' * 64},
+            'action_id': '00000000-0000-4000-8000-000000000015',
+            'module': {'id': 'network.nse_smb2_security_mode', 'version': 1, 'sha256': '5' * 64},
+            'collector': {'id': 'connected-relay', 'version': 2, 'sha256': '6' * 64},
+            'reservation': {
+                'id': '00000000-0000-4000-8000-000000000016',
+                'reserved': {'tcp_connect_attempts': 2, 'udp_datagrams': 1, 'protocol_requests': 2, 'transmitted_bytes': 4096, 'received_bytes': 16384, 'wall_time_ms': 15000, 'cpu_time_ms': 10000, 'processes': 1, 'output_bytes': 16384, 'authentication_attempts': 0},
+                'consumed': {'tcp_connect_attempts': 2, 'udp_datagrams': 1, 'protocol_requests': 1, 'transmitted_bytes': 768, 'received_bytes': 2048, 'wall_time_ms': 480, 'cpu_time_ms': 200, 'processes': 1, 'output_bytes': 512, 'authentication_attempts': 0},
+            },
+        },
+        'observation': {
+            'observation_id': '00000000-0000-4000-8000-000000000013', 'observed_at': '2026-09-09T11:58:00.000000Z', 'outcome': 'observed',
+            'asset': {'asset_key': 'synthetic-host', 'label': 'Synthetic host', 'kind': 'host', 'track': 'windows_ad', 'identifiers': [], 'context': {'domain': '', 'role': '', 'segment': '', 'source_locator': ''}},
+            'detector': {'name': 'smb2_security_mode', 'version': 1, 'deterministic': True},
+            'result': {'protocol': 'smb2', 'port': 445, 'security_mode': 'unknown', 'dialect': 'unknown'}, 'evidence_refs': [],
+        },
+        'signature': {'algorithm': 'Ed25519', 'encoding': 'base64', 'key_id': 'synthetic-key', 'value': base64.b64encode(b'\0' * 64).decode()},
+    }).encode(),
 }
 
 

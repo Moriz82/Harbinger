@@ -1,9 +1,10 @@
 """Offline parser dispatcher with dedicated, format-scoped importers."""
 from .common import MAX_RECORDS, TRACKS, archive, safe_text, secret_bearing, new_result, ParseContext
-from . import bloodhound_importer, manual_importer, nmap_importer, peas_importer, web_importer
+from . import bloodhound_importer, harness_observation_importer, manual_importer, nmap_importer, peas_importer, web_importer
 
 
-FORMATS = ('nmap_xml', 'nmap_text', 'nmap_gnmap', 'zap_json', 'har', 'burp_xml', 'linpeas_text', 'winpeas_text', 'bloodhound', 'manual_json')
+FORMATS = ('nmap_xml', 'nmap_text', 'nmap_gnmap', 'zap_json', 'har', 'burp_xml', 'linpeas_text', 'winpeas_text', 'bloodhound', 'manual_json', 'harness_observation_v1')
+FORMAT_LIMITS = {format: 256 * 1024**2 for format in FORMATS} | {'harness_observation_v1': 4 * 1024**2}
 
 
 def _finish(result):
@@ -21,7 +22,7 @@ def _finish(result):
 
 
 def parse(raw, format):
-    if format not in FORMATS or len(raw) > 256 * 1024**2 or raw.startswith(b'SQLite format 3'):
+    if format not in FORMATS or len(raw) > FORMAT_LIMITS[format] or raw.startswith(b'SQLite format 3'):
         raise ValueError('Unsupported format or input size')
     result = new_result(raw)
     context = ParseContext(result)
@@ -35,7 +36,9 @@ def parse(raw, format):
         bloodhound_importer.parse(raw, format, context)
     elif format == 'manual_json':
         manual_importer.parse(raw, format, context)
+    elif format == 'harness_observation_v1':
+        harness_observation_importer.parse(raw, format, context)
     return _finish(result)
 
 
-__all__ = ['FORMATS', 'TRACKS', 'archive', 'parse', 'safe_text', 'secret_bearing']
+__all__ = ['FORMATS', 'FORMAT_LIMITS', 'TRACKS', 'archive', 'parse', 'safe_text', 'secret_bearing']

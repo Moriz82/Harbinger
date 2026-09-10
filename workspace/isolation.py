@@ -12,7 +12,7 @@ import hashlib
 import time
 import uuid
 from .store import canonical
-from .parsers import FORMATS
+from .parsers import FORMATS, FORMAT_LIMITS
 from .parser_service import QUEUE_FILE_LIMITS, _open_queue, _queue_file_exists_at, _read_queue_file_at
 
 _slot = threading.Lock()
@@ -54,7 +54,7 @@ def queue_parser(path, format, queue):
                 size = 0
                 while chunk := incoming.read(1024 * 1024):
                     size += len(chunk)
-                    if size > 256 * 1024**2:
+                    if size > FORMAT_LIMITS.get(format, 0):
                         raise RuntimeError('Parser input exceeds its limit.')
                     digest.update(chunk)
                     outgoing.write(chunk)
@@ -124,7 +124,8 @@ def run_parser(path, format):
             if Path(p).exists():
                 cmd += ['--ro-bind', p, p]
         pythonpath = '/code:' + sysconfig.get_paths()['purelib']
-        cmd += ['--ro-bind', str(source), '/code/parsers', '--ro-bind', str(Path(path).absolute()), '/input', '--chdir', '/code', '--setenv', 'PYTHONPATH', pythonpath, str(Path(sys.executable).resolve()), '-B', '/code/parsers/worker.py', format]
+        contracts = Path(__file__).resolve().parent.parent / 'contracts'
+        cmd += ['--ro-bind', str(source), '/code/parsers', '--ro-bind', str(contracts), '/code/contracts', '--ro-bind', str(Path(path).absolute()), '/input', '--chdir', '/code', '--setenv', 'PYTHONPATH', pythonpath, str(Path(sys.executable).resolve()), '-B', '/code/parsers/worker.py', format]
         process = subprocess.Popen(cmd, stdout=fd, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, env={}, close_fds=True, start_new_session=True)
         try:
             code = process.wait(timeout=120)

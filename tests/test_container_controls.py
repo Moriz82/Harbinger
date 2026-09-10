@@ -114,6 +114,30 @@ def test_inline_evidence_images_require_review_and_safe_local_bytes(client, stor
     assert anonymous.get(f"/api/evidence/{approved['id']}/render").status_code == 401
 
 
+def test_evidence_preview_reports_byte_identified_inline_image_eligibility(client, store):
+    store = client.app.state.store
+    png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=')
+    before = audit_operations(store).count('evidence.rendered')
+
+    approved_png = install_evidence(store, png, 'misleading.txt')
+    preview = client.get(f"/api/evidence/{approved_png['id']}/preview")
+    assert preview.status_code == 200
+    assert preview.json()['inline_image_media_type'] == 'image/png'
+
+    mislabeled_text = install_evidence(store, b'synthetic text only', 'misleading.png')
+    assert client.get(f"/api/evidence/{mislabeled_text['id']}/preview").json()['inline_image_media_type'] is None
+
+    unsupported_webp = install_evidence(store, b'RIFF\x10\x00\x00\x00WEBPVP8 synthetic', 'fixture.webp')
+    assert client.get(f"/api/evidence/{unsupported_webp['id']}/preview").json()['inline_image_media_type'] is None
+
+    pending_png = install_evidence(store, png, 'pending.png', reviewed=False)
+    assert client.get(f"/api/evidence/{pending_png['id']}/preview").json()['inline_image_media_type'] is None
+
+    quarantined_png = install_evidence(store, png, 'quarantined.png', quarantined=True)
+    assert client.get(f"/api/evidence/{quarantined_png['id']}/preview").json()['inline_image_media_type'] is None
+    assert audit_operations(store).count('evidence.rendered') == before
+
+
 def test_container_storage_marker_is_private_and_typed(tmp_path, monkeypatch):
     monkeypatch.setenv('CONTAINERIZED', '1')
     marker = tmp_path / '.storage-verified.json'
