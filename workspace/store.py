@@ -154,6 +154,94 @@ class Store:
         with self.lock:
             self._assert_write_ready()
 
+    def reconcile_tail_event(self, actor=None, operation=None, ids=(), *, allowed_metadata=None, alternatives=None, **metadata):
+        """Commit one exact durable audit tail after an interrupted DB commit."""
+        if self.readonly:
+            raise RuntimeError('This workspace is open read-only')
+        base_fields = {
+            'sequence', 'event_id', 'utc', 'monotonic_ns', 'instance_id',
+            'engagement_id', 'clock_status', 'actor', 'operation', 'ids', 'previous',
+        }
+        if alternatives is None:
+            alternatives = ({
+                'actor': actor, 'operation': operation, 'ids': list(ids),
+                'metadata': metadata, 'allowed_metadata': allowed_metadata or {},
+            },)
+        elif actor is not None or operation is not None or metadata or allowed_metadata:
+            raise ValueError('Choose one recovery specification form')
+        specifications = []
+        for candidate in alternatives:
+            if set(candidate) != {'actor', 'operation', 'ids', 'metadata', 'allowed_metadata'}:
+                raise ValueError('Recovered event specification is invalid')
+            exact = candidate['metadata']
+            allowed = candidate['allowed_metadata']
+            if not isinstance(exact, dict) or not isinstance(allowed, dict) or set(exact) & set(allowed):
+                raise ValueError('Recovered metadata fields overlap')
+            specifications.append({**candidate, 'ids': list(candidate['ids'])})
+        with self.lock:
+            c = self.connect()
+            try:
+                rows = c.execute('SELECT seq,body,hash FROM events ORDER BY seq').fetchall()
+                previous = '0' * 64
+                with (self.root / 'audit.jsonl').open() as audit, (self.root / 'transcript.log').open() as transcript:
+                    for row in rows:
+                        item = json.loads(audit.readline())
+                        body = json.loads(row['body'])
+                        if item != {'body': body, 'hash': row['hash']} or body['previous'] != previous or digest(body) != row['hash']:
+                            raise ValueError('Existing audit history is invalid')
+                        readable = f'{body["utc"]} #{body["sequence"]} {canonical(body["operation"])} actor={canonical(body["actor"])} ids={canonical(body["ids"])}\n'
+                        if transcript.readline() != readable:
+                            raise ValueError('Existing transcript history is invalid')
+                        previous = row['hash']
+                    tail = audit.readline()
+                    transcript_tail = transcript.readline()
+                    if not tail or audit.read() or not transcript_tail or transcript.read():
+                        raise ValueError('Expected exactly one uncommitted audit tail')
+                item = json.loads(tail)
+                if not isinstance(item, dict) or set(item) != {'body', 'hash'} or not isinstance(item['body'], dict):
+                    raise ValueError('Audit tail shape is invalid')
+                body = item['body']
+                expected_sequence = rows[-1]['seq'] + 1 if rows else 1
+                if (body.get('sequence') != expected_sequence or body.get('previous') != previous
+                        or item['hash'] != digest(body)):
+                    raise ValueError('Audit tail does not match the requested recovery')
+                matched = None
+                for candidate in specifications:
+                    exact = candidate['metadata']
+                    allowed = candidate['allowed_metadata']
+                    expected_fields = base_fields | set(exact) | set(allowed)
+                    if (set(body) == expected_fields
+                            and body.get('actor') == candidate['actor']
+                            and body.get('operation') == candidate['operation']
+                            and body.get('ids') == candidate['ids']
+                            and all(body.get(key) == value for key, value in exact.items())
+                            and all(body.get(key) in values for key, values in allowed.items())):
+                        matched = candidate
+                        break
+                if matched is None:
+                    raise ValueError('Audit tail does not match the requested recovery')
+                uuid.UUID(body['event_id'])
+                if not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z', body.get('utc', '')):
+                    raise ValueError('Audit tail time is invalid')
+                if type(body.get('monotonic_ns')) is not int or body['monotonic_ns'] < 0:
+                    raise ValueError('Audit tail monotonic time is invalid')
+                expected_transcript = f'{body["utc"]} #{body["sequence"]} {canonical(matched["operation"])} actor={canonical(matched["actor"])} ids={canonical(matched["ids"])}\n'
+                if transcript_tail != expected_transcript:
+                    raise ValueError('Audit tail transcript does not match')
+                c.execute('BEGIN IMMEDIATE')
+                c.execute('INSERT INTO events(seq,body,hash) VALUES(?,?,?)', (body['sequence'], canonical(body), item['hash']))
+                c.commit()
+                self.blocked = None
+                self.verify()
+                self.audit_stats = self._stats()
+                return body
+            except Exception as error:
+                c.rollback()
+                self.blocked = 'Audit tail recovery failed. Preserve the workspace and inspect it.'
+                raise RuntimeError(self.blocked) from error
+            finally:
+                c.close()
+
     def event(self, c, actor, operation, ids=(), **metadata):
         previous = c.execute("SELECT seq,hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
         seq = previous["seq"] + 1 if previous else 1

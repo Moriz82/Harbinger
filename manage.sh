@@ -143,6 +143,14 @@ case "${1:-help}" in
     [[ $(stat -c '%u' "$card") == "$(id -u)" ]] || fail 'Peer card must be owned by the current user.'
     compose run --rm --no-deps -v "$card:/input/peer-card.json:ro" app python -m workspace.cli --workspace /state enroll /input/peer-card.json --fingerprint "$3"
     ;;
+  parser-receipts)
+    [[ $# -eq 1 ]] || fail 'Usage: ./manage.sh parser-receipts'
+    need_docker; require_services_stopped; prepare_dirs; run_cli parser-receipts
+    ;;
+  parser-ack)
+    [[ $# -eq 4 && "$3" == response || $# -eq 4 && "$3" == error ]] || fail 'Usage: ./manage.sh parser-ack JOB-ID response|error SHA256'
+    need_docker; require_services_stopped; prepare_dirs; run_cli parser-ack "$2" --kind "$3" --sha256 "$4"
+    ;;
   backup)
     [[ $# -eq 2 ]] || fail 'Usage: ./manage.sh backup NEW-DIRECTORY'
     need_docker; require_services_stopped; prepare_dirs
@@ -263,6 +271,8 @@ Usage: ./manage.sh COMMAND
   info | logs | verify         Inspect identity, service, and integrity state.
   peer-card                    Print the local pairing card.
   enroll CARD.json FINGERPRINT Enroll a verified peer.
+  parser-receipts               List closed parser receipts and their checksums.
+  parser-ack JOB KIND SHA256    Acknowledge one reviewed response or error receipt.
   backup NEW-DIRECTORY         Create a consistent local backup.
   restore BACKUP-DIRECTORY     Restore into a new state folder and verify it.
 EOF

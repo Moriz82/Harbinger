@@ -18,6 +18,7 @@ from workspace.cli import backup, encrypted_storage, initialize, restore
 from workspace.isolation import queue_parser
 from workspace.parser_service import atomic_file, file_sha256, inspect_queue, serve
 from workspace.server import create_app
+from workspace.store import Store
 from workspace.transfer import enroll, peer_http_headers, provision_keys, public_card
 
 
@@ -390,6 +391,295 @@ def test_closed_parser_receipts_remain_visible_without_blocking_restart(tmp_path
     finally:
         service.STOP = False
     assert (queue / f'{response_job}.response').exists() and (queue / f'{error_job}.error').exists()
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Harbinger owns parser recovery')
+def test_reviewed_closed_parser_receipt_can_be_acknowledged_before_backup(tmp_path, monkeypatch):
+    from workspace.parser_service import acknowledge_receipt
+    store = initialize(tmp_path / 'state', 'http://127.0.0.1:8710', 'Synthetic')
+    queue = store.root / 'parser-queue'; queue.mkdir(mode=0o700)
+    job = str(uuid.uuid4())
+    body = b'synthetic reviewed closed receipt\n'
+    path = queue / f'{job}.error'; path.write_bytes(body); path.chmod(0o600)
+    checksum = hashlib.sha256(body).hexdigest()
+    archive = store.root / 'artifacts' / 'parser-receipts'
+    fsynced_directories = []
+    original_fsync = os.fsync
+
+    def record_fsync(fd):
+        target = Path(os.readlink(f'/proc/self/fd/{fd}'))
+        if target.is_dir():
+            fsynced_directories.append(target)
+        return original_fsync(fd)
+
+    monkeypatch.setattr(os, 'fsync', record_fsync)
+
+    with pytest.raises(ValueError, match='Only closed'):
+        acknowledge_receipt(queue, archive, job, 'input', checksum)
+    with pytest.raises(ValueError, match='checksum changed'):
+        acknowledge_receipt(queue, archive, job, 'error', '0' * 64)
+    assert path.read_bytes() == body
+
+    receipt = acknowledge_receipt(queue, archive, job, 'error', checksum)
+    assert receipt == {'job_id': job, 'kind': 'error', 'size': len(body), 'sha256': checksum, 'already_archived': False}
+    assert not path.exists()
+    assert (archive / path.name).read_bytes() == body
+    assert store.root / 'artifacts' in fsynced_directories
+    assert queue in fsynced_directories and archive in fsynced_directories
+    assert acknowledge_receipt(queue, archive, job, 'error', checksum)['already_archived'] is True
+    assert backup(store, tmp_path / 'backup')['files'] >= 3
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Harbinger owns parser recovery')
+def test_parser_ack_cli_audits_intent_before_removing_reviewed_receipt(tmp_path):
+    import sys
+    store = initialize(tmp_path / 'state', 'http://127.0.0.1:8710', 'Synthetic')
+    queue = store.root / 'parser-queue'; queue.mkdir(mode=0o700)
+    job = str(uuid.uuid4())
+    body = b'synthetic reviewed response receipt\n'
+    path = queue / f'{job}.response'; path.write_bytes(body); path.chmod(0o600)
+    checksum = hashlib.sha256(body).hexdigest()
+
+    result = subprocess.run([
+        sys.executable, '-m', 'workspace.cli', '--workspace', str(store.root),
+        'parser-ack', job, '--kind', 'response', '--sha256', checksum,
+    ], text=True, capture_output=True)
+
+    assert result.returncode == 0 and not path.exists()
+    assert (store.root / 'artifacts' / 'parser-receipts' / path.name).read_bytes() == body
+    audit = (store.root / 'audit.jsonl').read_text()
+    assert audit.index('parser.receipt_acknowledgement_requested') < audit.index('parser.receipt_acknowledged')
+    assert job in audit and checksum in audit and body.decode().strip() not in audit
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Harbinger owns parser recovery')
+def test_parser_ack_completion_failure_preserves_and_reconciles_archived_receipt(tmp_path, monkeypatch):
+    from workspace.cli import acknowledge_parser_receipt
+    store = initialize(tmp_path / 'state', 'http://127.0.0.1:8710', 'Synthetic')
+    queue = store.root / 'parser-queue'; queue.mkdir(mode=0o700)
+    job = str(uuid.uuid4())
+    body = b'synthetic crash-safe response receipt\n'
+    path = queue / f'{job}.response'; path.write_bytes(body); path.chmod(0o600)
+    checksum = hashlib.sha256(body).hexdigest()
+    original_event = store.event
+
+    def fail_completion(connection, actor, operation, ids, **details):
+        if operation == 'parser.receipt_acknowledged':
+            raise OSError('synthetic completion audit failure')
+        return original_event(connection, actor, operation, ids, **details)
+
+    monkeypatch.setattr(store, 'event', fail_completion)
+    with pytest.raises(RuntimeError, match='completion event failed'):
+        acknowledge_parser_receipt(store, job, 'response', checksum)
+
+    archived = store.root / 'artifacts' / 'parser-receipts' / path.name
+    assert not path.exists() and archived.read_bytes() == body
+    audit = (store.root / 'audit.jsonl').read_text()
+    assert 'parser.receipt_acknowledgement_requested' in audit
+    assert 'parser.receipt_acknowledged' not in audit
+
+    recovered = Store(store.root)
+    receipt = acknowledge_parser_receipt(recovered, job, 'response', checksum)
+    assert receipt['already_archived'] is True and archived.read_bytes() == body
+    audit = (store.root / 'audit.jsonl').read_text()
+    assert 'parser.receipt_acknowledged' in audit
+    assert backup(recovered, tmp_path / 'recovered-backup')['files'] >= 4
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Harbinger owns parser recovery')
+def test_parser_ack_reconciles_completion_appended_before_database_commit_failure(tmp_path, monkeypatch):
+    from workspace.cli import acknowledge_parser_receipt
+    store = initialize(tmp_path / 'state', 'http://127.0.0.1:8710', 'Synthetic')
+    queue = store.root / 'parser-queue'; queue.mkdir(mode=0o700)
+    job = str(uuid.uuid4())
+    body = b'synthetic post-append interruption receipt\n'
+    path = queue / f'{job}.response'; path.write_bytes(body); path.chmod(0o600)
+    checksum = hashlib.sha256(body).hexdigest()
+    original_event = store.event
+
+    def fail_after_completion_append(connection, actor, operation, ids, **details):
+        result = original_event(connection, actor, operation, ids, **details)
+        if operation == 'parser.receipt_acknowledged':
+            raise OSError('synthetic interruption after completion audit append')
+        return result
+
+    monkeypatch.setattr(store, 'event', fail_after_completion_append)
+    with pytest.raises(RuntimeError, match='completion event failed'):
+        acknowledge_parser_receipt(store, job, 'response', checksum)
+
+    archived = store.root / 'artifacts' / 'parser-receipts' / path.name
+    assert not path.exists() and archived.read_bytes() == body
+    recovered = Store(store.root)
+    assert recovered.blocked == 'Audit integrity check failed. Preserve the workspace and inspect it.'
+
+    receipt = acknowledge_parser_receipt(recovered, job, 'response', checksum)
+    assert receipt['already_archived'] is True and recovered.blocked is None
+    assert archived.read_bytes() == body
+    assert recovered.verify()['events'] >= 2
+    audit = (store.root / 'audit.jsonl').read_text()
+    assert audit.count('parser.receipt_acknowledgement_requested') == 1
+    assert audit.count('parser.receipt_acknowledged') == 1
+    assert backup(recovered, tmp_path / 'post-append-backup')['files'] >= 4
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Harbinger owns parser recovery')
+def test_parser_ack_reconciles_request_appended_before_database_commit_failure(tmp_path, monkeypatch):
+    from workspace.cli import acknowledge_parser_receipt
+    store = initialize(tmp_path / 'state', 'http://127.0.0.1:8710', 'Synthetic')
+    queue = store.root / 'parser-queue'; queue.mkdir(mode=0o700)
+    job = str(uuid.uuid4())
+    body = b'synthetic request interruption receipt\n'
+    path = queue / f'{job}.error'; path.write_bytes(body); path.chmod(0o600)
+    checksum = hashlib.sha256(body).hexdigest()
+    original_event = store.event
+
+    def fail_after_request_append(connection, actor, operation, ids, **details):
+        result = original_event(connection, actor, operation, ids, **details)
+        if operation == 'parser.receipt_acknowledgement_requested':
+            raise OSError('synthetic interruption after request audit append')
+        return result
+
+    monkeypatch.setattr(store, 'event', fail_after_request_append)
+    with pytest.raises(OSError, match='request audit append'):
+        acknowledge_parser_receipt(store, job, 'error', checksum)
+
+    assert path.read_bytes() == body
+    recovered = Store(store.root)
+    assert recovered.blocked == 'Audit integrity check failed. Preserve the workspace and inspect it.'
+
+    receipt = acknowledge_parser_receipt(recovered, job, 'error', checksum)
+    archived = store.root / 'artifacts' / 'parser-receipts' / path.name
+    assert receipt['already_archived'] is False and recovered.blocked is None
+    assert not path.exists() and archived.read_bytes() == body
+    assert recovered.verify()['events'] >= 2
+    audit = (store.root / 'audit.jsonl').read_text()
+    assert audit.count('parser.receipt_acknowledgement_requested') == 1
+    assert audit.count('parser.receipt_acknowledged') == 1
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Harbinger owns parser recovery')
+def test_parser_ack_reconciles_repeat_request_tail_for_archived_receipt(tmp_path, monkeypatch):
+    from workspace.cli import acknowledge_parser_receipt
+    store = initialize(tmp_path / 'state', 'http://127.0.0.1:8710', 'Synthetic')
+    queue = store.root / 'parser-queue'; queue.mkdir(mode=0o700)
+    job = str(uuid.uuid4())
+    body = b'synthetic repeated acknowledgement receipt\n'
+    path = queue / f'{job}.response'; path.write_bytes(body); path.chmod(0o600)
+    checksum = hashlib.sha256(body).hexdigest()
+    acknowledge_parser_receipt(store, job, 'response', checksum)
+    original_event = store.event
+
+    def fail_repeat_request_after_append(connection, actor, operation, ids, **details):
+        result = original_event(connection, actor, operation, ids, **details)
+        if operation == 'parser.receipt_acknowledgement_requested':
+            raise OSError('synthetic repeat request interruption')
+        return result
+
+    monkeypatch.setattr(store, 'event', fail_repeat_request_after_append)
+    with pytest.raises(OSError, match='repeat request interruption'):
+        acknowledge_parser_receipt(store, job, 'response', checksum)
+
+    recovered = Store(store.root)
+    assert recovered.blocked == 'Audit integrity check failed. Preserve the workspace and inspect it.'
+    receipt = acknowledge_parser_receipt(recovered, job, 'response', checksum)
+    assert receipt['already_archived'] is True and recovered.blocked is None
+    assert recovered.verify()['events'] >= 4
+    audit = (store.root / 'audit.jsonl').read_text()
+    assert audit.count('parser.receipt_acknowledgement_requested') == 2
+    assert audit.count('parser.receipt_acknowledged') == 2
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Harbinger owns parser recovery')
+def test_parser_receipt_retry_repeats_archive_parent_sync(tmp_path, monkeypatch):
+    from workspace.parser_service import acknowledge_receipt
+    store = initialize(tmp_path / 'state', 'http://127.0.0.1:8710', 'Synthetic')
+    queue = store.root / 'parser-queue'; queue.mkdir(mode=0o700)
+    job = str(uuid.uuid4())
+    body = b'synthetic archive parent sync receipt\n'
+    path = queue / f'{job}.error'; path.write_bytes(body); path.chmod(0o600)
+    checksum = hashlib.sha256(body).hexdigest()
+    archive = store.root / 'artifacts' / 'parser-receipts'
+    original_fsync = os.fsync
+    parent_failures = 0
+    fsynced = []
+
+    def interrupt_first_parent_sync(fd):
+        nonlocal parent_failures
+        target = Path(os.readlink(f'/proc/self/fd/{fd}'))
+        if target.is_dir():
+            fsynced.append(target)
+        if target == store.root / 'artifacts' and parent_failures == 0:
+            parent_failures += 1
+            raise OSError('synthetic archive parent sync interruption')
+        return original_fsync(fd)
+
+    monkeypatch.setattr(os, 'fsync', interrupt_first_parent_sync)
+    with pytest.raises(OSError, match='parent sync interruption'):
+        acknowledge_receipt(queue, archive, job, 'error', checksum)
+    assert path.read_bytes() == body and archive.is_dir()
+
+    receipt = acknowledge_receipt(queue, archive, job, 'error', checksum)
+    assert receipt['already_archived'] is False and not path.exists()
+    assert fsynced.count(store.root / 'artifacts') == 2
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Harbinger owns parser recovery')
+def test_parser_receipt_retry_syncs_queue_and_existing_archive_after_rename(tmp_path, monkeypatch):
+    from workspace.parser_service import acknowledge_receipt
+    store = initialize(tmp_path / 'state', 'http://127.0.0.1:8710', 'Synthetic')
+    queue = store.root / 'parser-queue'; queue.mkdir(mode=0o700)
+    job = str(uuid.uuid4())
+    body = b'synthetic post-rename sync receipt\n'
+    path = queue / f'{job}.response'; path.write_bytes(body); path.chmod(0o600)
+    checksum = hashlib.sha256(body).hexdigest()
+    archive = store.root / 'artifacts' / 'parser-receipts'
+    original_fsync = os.fsync
+    queue_failures = 0
+    fsynced = []
+
+    def interrupt_first_queue_sync(fd):
+        nonlocal queue_failures
+        target = Path(os.readlink(f'/proc/self/fd/{fd}'))
+        if target.is_dir():
+            fsynced.append(target)
+        if target == queue and queue_failures == 0:
+            queue_failures += 1
+            raise OSError('synthetic queue sync interruption')
+        return original_fsync(fd)
+
+    monkeypatch.setattr(os, 'fsync', interrupt_first_queue_sync)
+    with pytest.raises(OSError, match='queue sync interruption'):
+        acknowledge_receipt(queue, archive, job, 'response', checksum)
+    archived = archive / path.name
+    assert not path.exists() and archived.read_bytes() == body
+
+    fsynced.clear()
+    receipt = acknowledge_receipt(queue, archive, job, 'response', checksum)
+    assert receipt['already_archived'] is True
+    assert queue in fsynced and archive in fsynced
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Harbinger owns parser recovery')
+def test_parser_ack_refuses_to_reconcile_an_unrelated_audit_tail(tmp_path):
+    from workspace.cli import acknowledge_parser_receipt
+    store = initialize(tmp_path / 'state', 'http://127.0.0.1:8710', 'Synthetic')
+    queue = store.root / 'parser-queue'; queue.mkdir(mode=0o700)
+    job = str(uuid.uuid4())
+    body = b'synthetic unrelated-tail receipt\n'
+    path = queue / f'{job}.error'; path.write_bytes(body); path.chmod(0o600)
+    checksum = hashlib.sha256(body).hexdigest()
+
+    with pytest.raises(OSError, match='synthetic unrelated interruption'):
+        with store.tx() as connection:
+            store.event(connection, 'fixture', 'fixture.unrelated_event', [], note='synthetic')
+            raise OSError('synthetic unrelated interruption')
+
+    recovered = Store(store.root)
+    assert recovered.blocked == 'Audit integrity check failed. Preserve the workspace and inspect it.'
+    with pytest.raises(RuntimeError, match='Audit tail recovery failed'):
+        acknowledge_parser_receipt(recovered, job, 'error', checksum)
+    assert path.read_bytes() == body
+    assert not (store.root / 'artifacts' / 'parser-receipts' / path.name).exists()
 
 
 @pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Harbinger owns parser recovery')

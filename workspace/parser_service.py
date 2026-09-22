@@ -1,5 +1,6 @@
 """One-job-at-a-time parser service for a Docker container with no network."""
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -268,6 +269,66 @@ def inspect_queue(queue, max_entries=QUEUE_METADATA_LIMIT):
             'recovery_required': ambiguous or not scan_complete,
         }
     finally:
+        os.close(queue_fd)
+
+
+def acknowledge_receipt(queue, archive, job_id, kind, expected_sha256):
+    """Atomically archive one reviewed receipt while the parser is stopped."""
+    job_id = str(uuid.UUID(job_id))
+    if kind not in ('response', 'error'):
+        raise ValueError('Only closed parser receipts can be acknowledged')
+    if not isinstance(expected_sha256, str) or len(expected_sha256) != 64:
+        raise ValueError('Parser receipt checksum is invalid')
+    try:
+        bytes.fromhex(expected_sha256)
+    except ValueError as error:
+        raise ValueError('Parser receipt checksum is invalid') from error
+    name = f'{job_id}.{kind}'
+    queue_fd = _open_queue(queue)
+    archive = Path(archive).absolute()
+    archive_parent_fd = _open_queue(archive.parent)
+    try:
+        try:
+            os.mkdir(archive.name, mode=0o700, dir_fd=archive_parent_fd)
+        except FileExistsError:
+            pass
+        os.fsync(archive_parent_fd)
+    finally:
+        os.close(archive_parent_fd)
+    archive_fd = _open_queue(archive)
+    try:
+        already_archived = False
+        try:
+            fd, before = _open_regular_at(queue_fd, name, QUEUE_FILE_LIMITS[kind])
+        except FileNotFoundError:
+            fd, before = _open_regular_at(archive_fd, name, QUEUE_FILE_LIMITS[kind])
+            already_archived = True
+        try:
+            checksum, opened = _hash_open_file(fd, before, QUEUE_FILE_LIMITS[kind])
+            current_fd = archive_fd if already_archived else queue_fd
+            current = os.stat(name, dir_fd=current_fd, follow_symlinks=False)
+            if not _same_file(opened, current):
+                raise ValueError('Parser receipt changed during acknowledgement')
+            if not hmac.compare_digest(checksum, expected_sha256.lower()):
+                raise ValueError('Parser receipt checksum changed')
+            if not already_archived:
+                try:
+                    os.stat(name, dir_fd=archive_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise ValueError('Parser receipt archive already exists')
+                os.rename(name, name, src_dir_fd=queue_fd, dst_dir_fd=archive_fd)
+            os.fsync(queue_fd)
+            os.fsync(archive_fd)
+            return {
+                'job_id': job_id, 'kind': kind, 'size': opened.st_size,
+                'sha256': checksum, 'already_archived': already_archived,
+            }
+        finally:
+            os.close(fd)
+    finally:
+        os.close(archive_fd)
         os.close(queue_fd)
 
 

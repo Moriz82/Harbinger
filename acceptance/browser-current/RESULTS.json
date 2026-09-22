@@ -1,0 +1,644 @@
+{
+  "app": "Harbinger",
+  "origin": "http://127.0.0.1:8710",
+  "captured_at_utc": "2026-09-22T07:35:14.743894+00:00",
+  "fixture": "synthetic-browser-v1",
+  "playwright": "1.62.0",
+  "runner_sha256": "6bf9e74a9015e1128cd787df069e739cecde2f36459a2808f316aa11d6427cc2",
+  "served_asset_sha256": {
+    "/assets/index-BxaNR_Ep.js": "5741c212e6bb3753664409ed9eb9ac1e6423488790fc1a2fe6b3c2fdde493f7f",
+    "/assets/index-CL9ozVFY.css": "770d9afce482ed0574b0b11cc02fd963c77d31a4501b19917a375d222438d1cc"
+  },
+  "scope": "Real browser and real served built assets; all API/session/login data use synthetic local fixture contracts. Native SSE fixture connection is deliberately closed. No live backend writes or credentials.",
+  "limitations": [
+    "683x384 is a compact reflow proxy only; actual 200 percent browser zoom requires manual acceptance.",
+    "Accessibility tree, focus, roles and names are automated; actual screen-reader output and usability require manual acceptance.",
+    "Synthetic login does not prove live authentication; backend behavior requires separate integration tests."
+  ],
+  "chromium": "152.0.7977.75",
+  "live_unauthenticated_screen": "passed; real session request renders login form, no credentials submitted",
+  "cases": [
+    {
+      "viewport": {
+        "width": 1366,
+        "height": 768
+      },
+      "screenshots": [
+        {
+          "file": "harbinger-home-1366x768.png",
+          "sha256": "9d56b4e81df8d26c23bd449cc1a629cb451d2cd913e086f1cc168807ba0a53bf",
+          "application": "Harbinger",
+          "route": "/overview",
+          "viewport": {
+            "width": 1366,
+            "height": 768
+          },
+          "image_dimensions": {
+            "width": 1366,
+            "height": 768
+          },
+          "role": "captain",
+          "fixture": "synthetic-browser-v1",
+          "operator": "automated Chromium acceptance",
+          "captured_at_utc": "2026-09-22T07:35:17.613969+00:00",
+          "full_page": false,
+          "browser_zoom": "default; no zoom command applied"
+        },
+        {
+          "file": "harbinger-editor-1366x768.png",
+          "sha256": "16100c7b49da027314dfca46697353752c02ca60863676cc1f7582556203b418",
+          "application": "Harbinger",
+          "route": "/findings",
+          "viewport": {
+            "width": 1366,
+            "height": 768
+          },
+          "image_dimensions": {
+            "width": 1366,
+            "height": 768
+          },
+          "role": "captain",
+          "fixture": "synthetic-browser-v1",
+          "operator": "automated Chromium acceptance",
+          "captured_at_utc": "2026-09-22T07:35:17.981225+00:00",
+          "full_page": false,
+          "browser_zoom": "default; no zoom command applied"
+        },
+        {
+          "file": "harbinger-offline-1366x768.png",
+          "sha256": "1448efb6e3bb75b831f07ae154102b54ba7d01616d6be4e40a292544001053d2",
+          "application": "Harbinger",
+          "route": "/findings",
+          "viewport": {
+            "width": 1366,
+            "height": 768
+          },
+          "image_dimensions": {
+            "width": 1366,
+            "height": 768
+          },
+          "role": "captain",
+          "fixture": "synthetic-browser-v1",
+          "operator": "automated Chromium acceptance",
+          "captured_at_utc": "2026-09-22T07:35:19.275835+00:00",
+          "full_page": false,
+          "browser_zoom": "default; no zoom command applied"
+        }
+      ],
+      "routes": {
+        "Map": {
+          "layout": {
+            "width": 1366,
+            "height": 768,
+            "documentWidth": 1366,
+            "bodyWidth": 1366,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 29,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        },
+        "Imports": {
+          "layout": {
+            "width": 1366,
+            "height": 768,
+            "documentWidth": 1366,
+            "bodyWidth": 1366,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 12,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        },
+        "Findings": {
+          "layout": {
+            "width": 1366,
+            "height": 768,
+            "documentWidth": 1366,
+            "bodyWidth": 1366,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 31,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        },
+        "Evidence": {
+          "layout": {
+            "width": 1366,
+            "height": 768,
+            "documentWidth": 1366,
+            "bodyWidth": 1366,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 10,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        },
+        "Transfer": {
+          "layout": {
+            "width": 1366,
+            "height": 768,
+            "documentWidth": 1366,
+            "bodyWidth": 1366,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 18,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        }
+      },
+      "login_layout": {
+        "width": 1366,
+        "height": 768,
+        "documentWidth": 1366,
+        "bodyWidth": 1366,
+        "overflow": false
+      },
+      "synthetic_login": "passed; browser form and fixture contract only",
+      "keyboard_skip": {
+        "first_tab": true,
+        "main_focus": true,
+        "focus_style": {
+          "style": "solid",
+          "width": "3px",
+          "visible": true
+        }
+      },
+      "reduced_motion": {
+        "matched": true,
+        "activeAnimations": 0,
+        "nonzeroTransitions": 0
+      },
+      "exact_italic_reminder": true,
+      "keyboard_graph_alternative": true,
+      "dialog": {
+        "initial_focus": true,
+        "tab_wrap": true,
+        "escape": true,
+        "focus_restored": true
+      },
+      "editor_layout": {
+        "width": 1366,
+        "height": 768,
+        "documentWidth": 1366,
+        "bodyWidth": 1366,
+        "overflow": false
+      },
+      "editor_accessibility": {
+        "named_controls": 31,
+        "unnamed_controls": [],
+        "main_landmarks": 1,
+        "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+      },
+      "connection_loss": {
+        "native_eventsource_stream_closed": true,
+        "banner": "Connection lost or not confirmed. Server writes are disabled. Last server update: not yet.",
+        "write_control_disabled": true,
+        "local_text_retained": true,
+        "no_offline_write": true
+      },
+      "offline_layout": {
+        "width": 1366,
+        "height": 768,
+        "documentWidth": 1366,
+        "bodyWidth": 1366,
+        "overflow": false
+      },
+      "browser_errors": [],
+      "failed_requests": [],
+      "http_errors": [],
+      "unexpected_fixture_routes": [],
+      "status": "passed"
+    },
+    {
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "screenshots": [
+        {
+          "file": "harbinger-home-1920x1080.png",
+          "sha256": "47e462ca025b15390951b7dfe56b0a7de3b5453c32bec1ca5c373525c530e515",
+          "application": "Harbinger",
+          "route": "/overview",
+          "viewport": {
+            "width": 1920,
+            "height": 1080
+          },
+          "image_dimensions": {
+            "width": 1920,
+            "height": 1080
+          },
+          "role": "captain",
+          "fixture": "synthetic-browser-v1",
+          "operator": "automated Chromium acceptance",
+          "captured_at_utc": "2026-09-22T07:35:21.371599+00:00",
+          "full_page": false,
+          "browser_zoom": "default; no zoom command applied"
+        },
+        {
+          "file": "harbinger-editor-1920x1080.png",
+          "sha256": "c11c28ba4a67a81dcef885af3ef64008f4a30f1e1d14b6cee041bd431a166031",
+          "application": "Harbinger",
+          "route": "/findings",
+          "viewport": {
+            "width": 1920,
+            "height": 1080
+          },
+          "image_dimensions": {
+            "width": 1920,
+            "height": 1080
+          },
+          "role": "captain",
+          "fixture": "synthetic-browser-v1",
+          "operator": "automated Chromium acceptance",
+          "captured_at_utc": "2026-09-22T07:35:21.640567+00:00",
+          "full_page": false,
+          "browser_zoom": "default; no zoom command applied"
+        },
+        {
+          "file": "harbinger-offline-1920x1080.png",
+          "sha256": "50e8b57025319083c7d08c47a802533d9721d8701c1d81ea013e6a4aca9c9b27",
+          "application": "Harbinger",
+          "route": "/findings",
+          "viewport": {
+            "width": 1920,
+            "height": 1080
+          },
+          "image_dimensions": {
+            "width": 1920,
+            "height": 1080
+          },
+          "role": "captain",
+          "fixture": "synthetic-browser-v1",
+          "operator": "automated Chromium acceptance",
+          "captured_at_utc": "2026-09-22T07:35:22.997352+00:00",
+          "full_page": false,
+          "browser_zoom": "default; no zoom command applied"
+        }
+      ],
+      "routes": {
+        "Map": {
+          "layout": {
+            "width": 1920,
+            "height": 1080,
+            "documentWidth": 1920,
+            "bodyWidth": 1920,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 29,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        },
+        "Imports": {
+          "layout": {
+            "width": 1920,
+            "height": 1080,
+            "documentWidth": 1920,
+            "bodyWidth": 1920,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 12,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        },
+        "Findings": {
+          "layout": {
+            "width": 1920,
+            "height": 1080,
+            "documentWidth": 1920,
+            "bodyWidth": 1920,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 31,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        },
+        "Evidence": {
+          "layout": {
+            "width": 1920,
+            "height": 1080,
+            "documentWidth": 1920,
+            "bodyWidth": 1920,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 10,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        },
+        "Transfer": {
+          "layout": {
+            "width": 1920,
+            "height": 1080,
+            "documentWidth": 1920,
+            "bodyWidth": 1920,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 18,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        }
+      },
+      "login_layout": {
+        "width": 1920,
+        "height": 1080,
+        "documentWidth": 1920,
+        "bodyWidth": 1920,
+        "overflow": false
+      },
+      "synthetic_login": "passed; browser form and fixture contract only",
+      "keyboard_skip": {
+        "first_tab": true,
+        "main_focus": true,
+        "focus_style": {
+          "style": "solid",
+          "width": "3px",
+          "visible": true
+        }
+      },
+      "reduced_motion": {
+        "matched": true,
+        "activeAnimations": 0,
+        "nonzeroTransitions": 0
+      },
+      "exact_italic_reminder": true,
+      "keyboard_graph_alternative": true,
+      "dialog": {
+        "initial_focus": true,
+        "tab_wrap": true,
+        "escape": true,
+        "focus_restored": true
+      },
+      "editor_layout": {
+        "width": 1920,
+        "height": 1080,
+        "documentWidth": 1920,
+        "bodyWidth": 1920,
+        "overflow": false
+      },
+      "editor_accessibility": {
+        "named_controls": 31,
+        "unnamed_controls": [],
+        "main_landmarks": 1,
+        "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+      },
+      "connection_loss": {
+        "native_eventsource_stream_closed": true,
+        "banner": "Connection lost or not confirmed. Server writes are disabled. Last server update: not yet.",
+        "write_control_disabled": true,
+        "local_text_retained": true,
+        "no_offline_write": true
+      },
+      "offline_layout": {
+        "width": 1920,
+        "height": 1080,
+        "documentWidth": 1920,
+        "bodyWidth": 1920,
+        "overflow": false
+      },
+      "browser_errors": [],
+      "failed_requests": [],
+      "http_errors": [],
+      "unexpected_fixture_routes": [],
+      "status": "passed"
+    },
+    {
+      "viewport": {
+        "width": 683,
+        "height": 384
+      },
+      "screenshots": [
+        {
+          "file": "harbinger-home-683x384.png",
+          "sha256": "4db9742530f82541f81d636908a75d1cc5e77fb7faf72c0289a8f11a2439705a",
+          "application": "Harbinger",
+          "route": "/overview",
+          "viewport": {
+            "width": 683,
+            "height": 384
+          },
+          "image_dimensions": {
+            "width": 683,
+            "height": 384
+          },
+          "role": "captain",
+          "fixture": "synthetic-browser-v1",
+          "operator": "automated Chromium acceptance",
+          "captured_at_utc": "2026-09-22T07:35:24.315231+00:00",
+          "full_page": false,
+          "browser_zoom": "default; no zoom command applied"
+        },
+        {
+          "file": "harbinger-editor-683x384.png",
+          "sha256": "9b158060eb0f9f5744b29c7695f644cea4008efeb77f65c902cf93bd39b95436",
+          "application": "Harbinger",
+          "route": "/findings",
+          "viewport": {
+            "width": 683,
+            "height": 384
+          },
+          "image_dimensions": {
+            "width": 683,
+            "height": 384
+          },
+          "role": "captain",
+          "fixture": "synthetic-browser-v1",
+          "operator": "automated Chromium acceptance",
+          "captured_at_utc": "2026-09-22T07:35:24.485940+00:00",
+          "full_page": false,
+          "browser_zoom": "default; no zoom command applied"
+        },
+        {
+          "file": "harbinger-offline-683x384.png",
+          "sha256": "d5c9cdee9f2cf671a0c37d063539111d456be5ec899f2ca368c9ea6524d720b8",
+          "application": "Harbinger",
+          "route": "/findings",
+          "viewport": {
+            "width": 683,
+            "height": 384
+          },
+          "image_dimensions": {
+            "width": 683,
+            "height": 384
+          },
+          "role": "captain",
+          "fixture": "synthetic-browser-v1",
+          "operator": "automated Chromium acceptance",
+          "captured_at_utc": "2026-09-22T07:35:25.736068+00:00",
+          "full_page": false,
+          "browser_zoom": "default; no zoom command applied"
+        }
+      ],
+      "routes": {
+        "Map": {
+          "layout": {
+            "width": 683,
+            "height": 384,
+            "documentWidth": 683,
+            "bodyWidth": 683,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 29,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        },
+        "Imports": {
+          "layout": {
+            "width": 683,
+            "height": 384,
+            "documentWidth": 683,
+            "bodyWidth": 683,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 12,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        },
+        "Findings": {
+          "layout": {
+            "width": 683,
+            "height": 384,
+            "documentWidth": 683,
+            "bodyWidth": 683,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 31,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        },
+        "Evidence": {
+          "layout": {
+            "width": 683,
+            "height": 384,
+            "documentWidth": 683,
+            "bodyWidth": 683,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 10,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        },
+        "Transfer": {
+          "layout": {
+            "width": 683,
+            "height": 384,
+            "documentWidth": 683,
+            "bodyWidth": 683,
+            "overflow": false
+          },
+          "accessibility": {
+            "named_controls": 18,
+            "unnamed_controls": [],
+            "main_landmarks": 1,
+            "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+          }
+        }
+      },
+      "login_layout": {
+        "width": 683,
+        "height": 384,
+        "documentWidth": 683,
+        "bodyWidth": 683,
+        "overflow": false
+      },
+      "synthetic_login": "passed; browser form and fixture contract only",
+      "keyboard_skip": {
+        "first_tab": true,
+        "main_focus": true,
+        "focus_style": {
+          "style": "solid",
+          "width": "3px",
+          "visible": true
+        }
+      },
+      "reduced_motion": {
+        "matched": true,
+        "activeAnimations": 0,
+        "nonzeroTransitions": 0
+      },
+      "exact_italic_reminder": true,
+      "keyboard_graph_alternative": true,
+      "dialog": {
+        "initial_focus": true,
+        "tab_wrap": true,
+        "escape": true,
+        "focus_restored": true
+      },
+      "editor_layout": {
+        "width": 683,
+        "height": 384,
+        "documentWidth": 683,
+        "bodyWidth": 683,
+        "overflow": false
+      },
+      "editor_accessibility": {
+        "named_controls": 31,
+        "unnamed_controls": [],
+        "main_landmarks": 1,
+        "method": "Chromium accessibility tree; not screen-reader speech or usability proof"
+      },
+      "connection_loss": {
+        "native_eventsource_stream_closed": true,
+        "banner": "Connection lost or not confirmed. Server writes are disabled. Last server update: not yet.",
+        "write_control_disabled": true,
+        "local_text_retained": true,
+        "no_offline_write": true
+      },
+      "offline_layout": {
+        "width": 683,
+        "height": 384,
+        "documentWidth": 683,
+        "bodyWidth": 683,
+        "overflow": false
+      },
+      "browser_errors": [],
+      "failed_requests": [],
+      "http_errors": [],
+      "unexpected_fixture_routes": [],
+      "status": "passed"
+    }
+  ],
+  "status": "passed"
+}

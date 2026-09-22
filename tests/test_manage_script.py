@@ -83,3 +83,11 @@ def test_restore_uses_runtime_identity_and_atomic_staging():
     assert 'mark_encrypted_path "$stage"' in restore
     assert 'unlink -- "$stage/.storage-verified.json"' in restore
     assert '?mode=ro&immutable=1' in restore
+
+
+def test_parser_receipt_acknowledgement_requires_stopped_services_and_exact_checksum():
+    script = (Path(__file__).parents[1] / 'manage.sh').read_text()
+    receipts = script.split('  parser-receipts)', 1)[1].split('  backup)', 1)[0]
+    assert receipts.count('require_services_stopped') == 2
+    assert 'run_cli parser-receipts' in receipts
+    assert 'run_cli parser-ack "$2" --kind "$3" --sha256 "$4"' in receipts

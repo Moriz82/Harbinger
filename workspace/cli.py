@@ -292,6 +292,60 @@ def backup(store, destination):
     return {'files': len(files), 'manifest_hash': digest(manifest)}
 
 
+def acknowledge_parser_receipt(store, job_id, kind, sha256):
+    """Record intent, archive the receipt, and durably record completion."""
+    requested = {
+        'job_id': str(uuid.UUID(job_id)), 'kind': kind,
+        'sha256': sha256.lower(),
+    }
+    from .parser_service import acknowledge_receipt
+    queue = store.root / 'parser-queue'
+    archive = store.root / 'artifacts' / 'parser-receipts'
+    name = f'{requested["job_id"]}.{kind}'
+    requested_recovered = False
+    if store.blocked:
+        queue_path = queue / name
+        archive_path = archive / name
+        queue_present = queue_path.exists() and not queue_path.is_symlink()
+        archive_present = archive_path.exists() and not archive_path.is_symlink()
+        if queue_present and not archive_present:
+            store.reconcile_tail_event(
+                'operator', 'parser.receipt_acknowledgement_requested', [], **requested,
+            )
+            requested_recovered = True
+        elif archive_present and not queue_present:
+            receipt = acknowledge_receipt(queue, archive, job_id, kind, sha256)
+            exact = {key: value for key, value in receipt.items() if key != 'already_archived'}
+            recovered = store.reconcile_tail_event(alternatives=(
+                {
+                    'actor': 'operator', 'operation': 'parser.receipt_acknowledgement_requested',
+                    'ids': [], 'metadata': requested, 'allowed_metadata': {},
+                },
+                {
+                    'actor': 'operator', 'operation': 'parser.receipt_acknowledged',
+                    'ids': [], 'metadata': exact,
+                    'allowed_metadata': {'already_archived': (False, True)},
+                },
+            ))
+            if recovered['operation'] == 'parser.receipt_acknowledged':
+                return receipt
+            requested_recovered = True
+        else:
+            raise RuntimeError(store.blocked)
+    store.require_write_ready()
+    if not requested_recovered:
+        with store.tx() as connection:
+            store.event(connection, 'operator', 'parser.receipt_acknowledgement_requested', [], **requested)
+    receipt = acknowledge_receipt(queue, archive, job_id, kind, sha256)
+    try:
+        with store.tx() as connection:
+            store.event(connection, 'operator', 'parser.receipt_acknowledged', [], **receipt)
+    except Exception as error:
+        store.blocked = 'Parser receipt was archived but its completion event failed. Restart and reconcile the same receipt.'
+        raise RuntimeError(store.blocked) from error
+    return receipt
+
+
 def restore(source, destination):
     source = Path(source).absolute()
     destination = Path(destination).absolute()
@@ -376,6 +430,8 @@ def main():
     peer = sub.add_parser('enroll'); peer.add_argument('card', type=Path); peer.add_argument('--fingerprint', required=True)
     harness_peer = sub.add_parser('harness-enroll'); harness_peer.add_argument('card', type=Path); harness_peer.add_argument('--fingerprint', required=True)
     harness_revoke = sub.add_parser('harness-revoke'); harness_revoke.add_argument('source_id')
+    sub.add_parser('parser-receipts')
+    parser_ack = sub.add_parser('parser-ack'); parser_ack.add_argument('job_id'); parser_ack.add_argument('--kind', choices=('response', 'error'), required=True); parser_ack.add_argument('--sha256', required=True)
     back = sub.add_parser('backup'); back.add_argument('destination', type=Path)
     restore_parser = sub.add_parser('restore'); restore_parser.add_argument('source', type=Path)
     gw = sub.add_parser('ghostwriter'); gw.add_argument('--origin', required=True); gw.add_argument('--report-id', type=int, required=True); gw.add_argument('--severity-id', type=int, required=True); gw.add_argument('--finding-type-id', type=int, required=True)
@@ -422,6 +478,22 @@ def main():
             from .harness_trust import revoke_harness_source
             revoke_harness_source(store, args.source_id)
             print('Harness source revoked.')
+        elif args.command == 'parser-receipts':
+            if APP_NAME != 'Harbinger':
+                raise ValueError('Parser receipts belong only to Harbinger')
+            from .parser_service import inspect_queue
+            queue = store.root / 'parser-queue'
+            state = inspect_queue(queue) if queue.exists() else {
+                'entries': [], 'total_entries': 0, 'reported_entries': 0,
+                'truncated': False, 'scan_complete': True, 'recovery_required': False,
+            }
+            archive = store.root / 'artifacts' / 'parser-receipts'
+            state['archived_entries'] = inspect_queue(archive)['entries'] if archive.exists() else []
+            print(canonical(state))
+        elif args.command == 'parser-ack':
+            if APP_NAME != 'Harbinger':
+                raise ValueError('Parser receipts belong only to Harbinger')
+            print(canonical(acknowledge_parser_receipt(store, args.job_id, args.kind, args.sha256)))
         elif args.command == 'backup':
             print(canonical(backup(store, args.destination)))
         elif args.command == 'ghostwriter':

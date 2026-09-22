@@ -123,9 +123,18 @@ def run_parser(path, format):
         for p in dict.fromkeys(['/usr', '/lib', '/lib64', sys.base_prefix, sys.prefix]):
             if Path(p).exists():
                 cmd += ['--ro-bind', p, p]
-        pythonpath = '/code:' + sysconfig.get_paths()['purelib']
+        purelib = sysconfig.get_paths()['purelib']
         contracts = Path(__file__).resolve().parent.parent / 'contracts'
-        cmd += ['--ro-bind', str(source), '/code/parsers', '--ro-bind', str(contracts), '/code/contracts', '--ro-bind', str(Path(path).absolute()), '/input', '--chdir', '/code', '--setenv', 'PYTHONPATH', pythonpath, str(Path(sys.executable).resolve()), '-B', '/code/parsers/worker.py', format]
+        cmd += [
+            '--ro-bind', str(source), '/code/parsers',
+            '--ro-bind', str(contracts), '/code/contracts',
+            '--ro-bind', str(Path(path).absolute()), '/input',
+            '--chdir', '/code',
+            '--setenv', 'PYTHONPATH', '/code',
+            '--setenv', 'PARSER_PURELIB', purelib,
+            str(Path(sys.executable).resolve()), '-S', '-B',
+            '/code/parsers/worker.py', format,
+        ]
         process = subprocess.Popen(cmd, stdout=fd, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, env={}, close_fds=True, start_new_session=True)
         try:
             code = process.wait(timeout=120)

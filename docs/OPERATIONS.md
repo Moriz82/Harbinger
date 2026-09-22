@@ -83,6 +83,8 @@ Stop the service. Back up to a new directory:
 
 ```sh
 ./manage.sh stop
+./manage.sh parser-receipts
+./manage.sh parser-ack JOB-ID error SHA256
 ./manage.sh backup /APPROVED/NEW/harbinger-backup
 ```
 
@@ -96,4 +98,4 @@ Verify the receipt and keep the source workspace. Restore only when `state/` is 
 
 Start only after the engagement and instance identity are correct.
 
-The backup manifest records the size and SHA-256 checksum of every file. The backup seals its SQLite copy and does not keep WAL sidecars. Restore opens the source in immutable mode and rechecks each staged copy before it publishes the new workspace. If Harbinger finds an input, request, running job, cancel marker, or unsafe parser entry after a restart, it blocks mutations and backup until an operator reviews the queue. Closed response and error receipts remain available for review and do not block new work. Review and archive closed receipts before backup because the backup refuses a non-empty parser queue.
+The backup manifest records the size and SHA-256 checksum of every file. The backup seals its SQLite copy and does not keep WAL sidecars. Restore opens the source in immutable mode and rechecks each staged copy before it publishes the new workspace. If Harbinger finds an input, request, running job, cancel marker, or unsafe parser entry after a restart, it blocks mutations and backup until an operator reviews the queue. Closed response and error receipts remain available for review and do not block new work. Run `parser-receipts` while the services are stopped. Then acknowledge only the reviewed receipt with its exact job ID, kind, and SHA-256 value. `parser-ack` refuses active job files and changed receipts. It atomically moves the exact receipt into protected artifact storage before it records completion. A crash cannot discard the receipt. Repeat the same checksum-bound command after recovery to complete an interrupted acknowledgement. Backup remains blocked until the live queue is empty and includes the archived receipt.

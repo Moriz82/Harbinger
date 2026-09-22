@@ -1,7 +1,16 @@
 """Fixed entry point inside the networkless parser sandbox."""
 import json
+import os
 import resource
 import sys
+
+# Append reviewed host dependencies after the standard library. Some hosts ship
+# compatibility modules in site-packages with standard-library names. The
+# launcher uses -S so .pth startup code and those names cannot replace stdlib.
+dependency_path = os.environ.get('PARSER_PURELIB')
+if dependency_path:
+    sys.path.append(dependency_path)
+
 resource.setrlimit(resource.RLIMIT_AS, (1024**3, 1024**3))
 resource.setrlimit(resource.RLIMIT_CPU, (110, 110))
 resource.setrlimit(resource.RLIMIT_FSIZE, (128 * 1024**2, 128 * 1024**2))

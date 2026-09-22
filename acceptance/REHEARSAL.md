@@ -1,5 +1,15 @@
 # Synthetic rehearsal
 
+## Current validation
+
+Run date: 2026-09-22 UTC.
+
+Current source passed 251 backend tests, 68 frontend tests, TypeScript checks, and the production build. The same-host Docker rehearsal imported Nmap XML through the networkless parser, transferred four linked records and evidence to Merlin, returned the original receipt on replay, reported 503 while Merlin was stopped, imported the encrypted fallback after restart, rejected a tampered bundle, and preserved populated state through backup and restore. A stale Merlin draft save returned 409. Live SSE replay and reset passed.
+
+Current-source deployments on the two designated Kali VMs used fresh private-CA certificates. Strict HTTPS checks passed in both directions. Direct signed transfer, fallback import, dependency deduplication, draft creation, parser receipt review, backup, restore, integrity verification, and restart passed. Original states and the older deployments were preserved. No assessment tool ran through either application.
+
+The current browser run produced nine reviewed Harbinger captures. See [BROWSER-QA.md](BROWSER-QA.md). Actual 200 percent zoom and screen-reader speech remain manual gates.
+
 Run date: 2026-09-09 UTC.
 
 The Docker rehearsals used synthetic records only.
