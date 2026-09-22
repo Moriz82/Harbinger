@@ -91,3 +91,44 @@ def test_parser_receipt_acknowledgement_requires_stopped_services_and_exact_chec
     assert receipts.count('require_services_stopped') == 2
     assert 'run_cli parser-receipts' in receipts
     assert 'run_cli parser-ack "$2" --kind "$3" --sha256 "$4"' in receipts
+
+
+def test_root_enrollment_stages_a_private_app_owned_peer_card_and_removes_it():
+    script = (Path(__file__).parents[1] / 'manage.sh').read_text()
+    helper = script.split('stage_peer_card() {', 1)[1].split('\n}', 1)[0]
+    enroll = script.split('  enroll)', 1)[1].split('  parser-receipts)', 1)[0]
+    assert 'os.O_NOFOLLOW' in helper
+    assert 'before.st_uid != os.geteuid()' in helper
+    assert 'before.st_dev, before.st_ino, before.st_size' in helper
+    assert 'os.fchown(destination_fd, int(uid), int(gid))' in helper
+    assert 'os.fchmod(destination_fd, 0o600)' in helper
+    assert 'mktemp "$ROOT/.harbinger-peer-card.XXXXXXXX"' in enroll
+    assert 'stage_peer_card "$card" "$staged_card" "$runtime_uid" "$runtime_gid"' in enroll
+    assert 'trap cleanup_staged_card EXIT' in enroll
+    assert 'rm -f -- "$staged_card"' in enroll
+
+
+def test_peer_card_staging_copies_only_a_stable_regular_file(tmp_path):
+    source = tmp_path / 'peer-card.json'
+    source.write_text('{"synthetic":true}\n')
+    source.chmod(0o600)
+    destination = tmp_path / 'stage'
+    destination.touch(mode=0o600)
+    script = (Path(__file__).parents[1] / 'manage.sh').read_text()
+    helper = tmp_path / 'stage-peer-card.sh'
+    helper.write_text(script.split('case "${1:-help}"', 1)[0] + '\nstage_peer_card "$@"\n')
+    result = subprocess.run(
+        ['bash', str(helper), str(source), str(destination), str(os.getuid()), str(os.getgid())],
+        text=True, capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert destination.read_text() == source.read_text()
+    assert destination.stat().st_mode & 0o777 == 0o600
+    symlink = tmp_path / 'peer-card-link.json'
+    symlink.symlink_to(source)
+    rejected = subprocess.run(
+        ['bash', str(helper), str(symlink), str(destination), str(os.getuid()), str(os.getgid())],
+        text=True, capture_output=True,
+    )
+    assert rejected.returncode != 0
+    assert destination.read_text() == source.read_text()

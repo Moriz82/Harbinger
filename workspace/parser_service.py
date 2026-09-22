@@ -25,6 +25,7 @@ QUEUE_FILE_LIMITS = {
     'error': 4096,
     'cancel': 4096,
 }
+HEALTH_PID_FILE = Path('/tmp/harbinger-parser.pid')
 
 
 def stopping(*_):
@@ -272,6 +273,57 @@ def inspect_queue(queue, max_entries=QUEUE_METADATA_LIMIT):
         os.close(queue_fd)
 
 
+def _parser_process_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return b'workspace.parser_service' in Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+    except (OSError, ValueError):
+        return False
+
+
+def queue_is_safe_for_health(queue):
+    """Check every bounded queue entry without treating active jobs as recovery."""
+    try:
+        queue_fd = _open_queue(queue)
+    except (OSError, ValueError):
+        return False
+    try:
+        with _scan_queue(queue_fd) as entries:
+            for count, entry in enumerate(entries, start=1):
+                if count > QUEUE_SCAN_LIMIT:
+                    return False
+                identity = _queue_identity(entry.name)
+                if identity is None:
+                    return False
+                try:
+                    _queue_file_exists_at(queue_fd, entry.name, QUEUE_FILE_LIMITS[identity[1]])
+                except (FileNotFoundError, OSError, ValueError):
+                    return False
+    finally:
+        os.close(queue_fd)
+    return True
+
+
+def healthy(queue):
+    """Check that the parser loop is alive and the queue has no unsafe entries."""
+    try:
+        if not queue_is_safe_for_health(queue):
+            return False
+        pid = int(HEALTH_PID_FILE.read_text())
+    except (OSError, ValueError):
+        return False
+    return _parser_process_alive(pid)
+
+
+def _write_health_pid():
+    fd = os.open(HEALTH_PID_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        os.write(fd, str(os.getpid()).encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def acknowledge_receipt(queue, archive, job_id, kind, expected_sha256):
     """Atomically archive one reviewed receipt while the parser is stopped."""
     job_id = str(uuid.UUID(job_id))
@@ -350,6 +402,7 @@ def serve(queue):
     state = inspect_queue(root)
     if state['recovery_required']:
         raise RuntimeError('Parser recovery is required for interrupted jobs')
+    _write_health_pid()
     signal.signal(signal.SIGTERM, stopping)
     signal.signal(signal.SIGINT, stopping)
     queue_fd = _open_queue(root)
@@ -418,9 +471,12 @@ def serve(queue):
                     temporary.unlink(missing_ok=True)
     finally:
         os.close(queue_fd)
+        HEALTH_PID_FILE.unlink(missing_ok=True)
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == '--healthcheck':
+        return 0 if healthy(sys.argv[2]) else 1
     if len(sys.argv) != 2:
         print('usage: python -m workspace.parser_service QUEUE', file=sys.stderr)
         return 64

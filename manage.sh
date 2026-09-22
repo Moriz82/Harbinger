@@ -57,6 +57,43 @@ runtime_identity() {
   [[ "$value" =~ ^[0-9]+:[0-9]+$ ]] || fail 'The application storage user must be a numeric UID:GID.'
   printf '%s\n' "$value"
 }
+stage_peer_card() {
+  local source=$1 destination=$2 runtime_uid=$3 runtime_gid=$4
+  python3 - "$source" "$destination" "$runtime_uid" "$runtime_gid" <<'PY'
+import os
+import stat
+import sys
+
+source, destination, uid, gid = sys.argv[1:]
+source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+try:
+    before = os.fstat(source_fd)
+    if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid():
+        raise ValueError('Peer card must be owned by the current user.')
+    destination_fd = os.open(destination, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        while True:
+            chunk = os.read(source_fd, 1024 * 1024)
+            if not chunk:
+                break
+            view = memoryview(chunk)
+            while view:
+                written = os.write(destination_fd, view)
+                if written <= 0:
+                    raise OSError('Peer card staging write stopped')
+                view = view[written:]
+        after = os.fstat(source_fd)
+        if (before.st_dev, before.st_ino, before.st_size) != (after.st_dev, after.st_ino, after.st_size):
+            raise ValueError('Peer card changed during staging.')
+        os.fchmod(destination_fd, 0o600)
+        os.fchown(destination_fd, int(uid), int(gid))
+        os.fsync(destination_fd)
+    finally:
+        os.close(destination_fd)
+finally:
+    os.close(source_fd)
+PY
+}
 require_services_stopped() {
   local running
   running=$(compose ps --status running -q) || fail 'Cannot inspect the application services.'
@@ -141,7 +178,19 @@ case "${1:-help}" in
     [[ -f "$2" && ! -L "$2" ]] || fail 'Peer card must be a regular, non-symlink file.'
     card=$(realpath -- "$2")
     [[ $(stat -c '%u' "$card") == "$(id -u)" ]] || fail 'Peer card must be owned by the current user.'
+    runtime_user=$(runtime_identity)
+    runtime_uid=${runtime_user%%:*}
+    runtime_gid=${runtime_user##*:}
+    if [[ $(id -u) == 0 && "$runtime_user" != "$(id -u):$(id -g)" ]]; then
+      staged_card=$(mktemp "$ROOT/.harbinger-peer-card.XXXXXXXX")
+      cleanup_staged_card() { local status=$?; rm -f -- "$staged_card"; trap - EXIT; exit "$status"; }
+      trap cleanup_staged_card EXIT
+      stage_peer_card "$card" "$staged_card" "$runtime_uid" "$runtime_gid"
+      card=$staged_card
+    fi
     compose run --rm --no-deps -v "$card:/input/peer-card.json:ro" app python -m workspace.cli --workspace /state enroll /input/peer-card.json --fingerprint "$3"
+    trap - EXIT
+    [[ -z ${staged_card:-} ]] || rm -f -- "$staged_card"
     ;;
   parser-receipts)
     [[ $# -eq 1 ]] || fail 'Usage: ./manage.sh parser-receipts'

@@ -36,6 +36,28 @@ it('retains later keystrokes when a delayed finding PUT acknowledges an older sn
   await act(async () => finish(response({ ...finding, revision_id: 'r3', data: { ...finding.data, observation: 'Later keystrokes B' } })))
 })
 
+it('keeps a new finding draft when the initial queue load finishes later', async () => {
+  let finishRecords!: (value: Response) => void
+  let finishEvidence!: (value: Response) => void
+  fetchMock.mockImplementation((path: string) => {
+    if (path === '/api/records?kind=finding') return new Promise<Response>(resolve => { finishRecords = resolve })
+    if (path === '/api/evidence') return new Promise<Response>(resolve => { finishEvidence = resolve })
+    return base(path)
+  })
+  render(<Findings session={session} refreshKey={0} onDirty={() => undefined} />)
+  await waitFor(() => expect(finishRecords).toBeTypeOf('function'))
+  fireEvent.click(screen.getByRole('button', { name: 'New finding' }))
+  fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Draft created while loading' } })
+  fireEvent.change(screen.getByLabelText('Observation'), { target: { value: 'Keep this local work' } })
+  await act(async () => {
+    finishRecords(response({ items: [finding], total: 1 }))
+    finishEvidence(response({ items: [] }))
+  })
+  expect(screen.getByLabelText('Title')).toHaveValue('Draft created while loading')
+  expect(screen.getByLabelText('Observation')).toHaveValue('Keep this local work')
+  expect(screen.getByText('Unsaved changes · Save before review or navigation.')).toBeInTheDocument()
+})
+
 it('serializes a first finding save and uses its returned ID for later edits', async () => {
   let finish!: (value: Response) => void
   fetchMock.mockImplementation((path: string, init?: RequestInit) => {

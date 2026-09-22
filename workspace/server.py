@@ -230,6 +230,10 @@ def create_app(root):
     def get_session(request: Request):
         return session_response(request.state.session)
 
+    @app.get('/healthz')
+    def healthz():
+        return {'status': 'ok'}
+
     @app.get('/api/readiness')
     def readiness():
         store.require_write_ready()

@@ -16,6 +16,12 @@ services:
     mem_limit: 1152m
     init: true
     restart: "no"
+    healthcheck:
+      test: ["CMD", "python", "-m", "workspace.parser_service", "--healthcheck", "/parser-queue"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
   app:
     build:
       context: .
@@ -25,7 +31,7 @@ services:
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     depends_on:
       parser:
-        condition: service_started
+        condition: service_healthy
     environment:
       APP_BIND: 0.0.0.0
       APP_PORT: "${APP_PORT:-8710}"
@@ -53,7 +59,7 @@ services:
     init: true
     restart: "no"
     healthcheck:
-      test: ["CMD", "python", "-c", "import os,socket;s=socket.create_connection(('127.0.0.1',int(os.environ['APP_PORT'])),2);s.close()"]
+      test: ["CMD", "python", "-c", "import http.client,os,ssl;from urllib.parse import urlsplit;from workspace.store import Store;config=Store('/state',readonly=True).setting('config');origin=urlsplit(config['origin']);connection=(http.client.HTTPSConnection('127.0.0.1',int(os.environ['APP_PORT']),context=ssl._create_unverified_context()) if os.environ.get('APP_TLS_CERT') else http.client.HTTPConnection('127.0.0.1',int(os.environ['APP_PORT'])));connection.request('GET','/healthz',headers={'Host':origin.netloc});response=connection.getresponse();raise SystemExit(response.status != 200)"]
       interval: 5s
       timeout: 3s
       retries: 12

@@ -49,6 +49,8 @@ Exchange the card through the approved team channel. Compare its printed fingerp
 ./manage.sh info
 ```
 
+When an administrator runs enrollment for an application UID:GID that differs from root, Harbinger validates the root-owned card and uses a private, app-owned temporary copy only for the container command. It removes that copy when enrollment ends.
+
 Start both applications. In Harbinger, select the records, preview the complete transfer set, and check the recipient. Send the exact reviewed transfer. Keep an uncertain result unresolved until the receiving host confirms the bundle ID and manifest hash.
 
 The receiving host admits only a request signed by its enrolled peer. The signature binds the source, recipient, timestamp, one-use nonce, declared length, and body checksum. A rejected or uncertain transfer is never retried automatically.

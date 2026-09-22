@@ -57,6 +57,89 @@ def test_failed_parser_publication_leaves_no_final_or_temporary_file(tmp_path, m
     assert not list(tmp_path.iterdir())
 
 
+def test_parser_healthcheck_requires_the_live_parser_and_rejects_unsafe_queue_entries(tmp_path, monkeypatch):
+    import workspace.parser_service as service
+    queue = tmp_path / 'queue'; queue.mkdir(mode=0o700)
+    pid_file = tmp_path / 'parser.pid'
+    monkeypatch.setattr(service, 'HEALTH_PID_FILE', pid_file)
+    assert service.healthy(queue) is False
+    pid_file.write_text('1234')
+    monkeypatch.setattr(service, '_parser_process_alive', lambda pid: pid == 1234)
+    assert service.healthy(queue) is True
+    (queue / 'unexpected').write_text('synthetic fixture')
+    assert service.healthy(queue) is False
+
+
+def test_parser_healthcheck_accepts_active_queue_files_for_a_live_parser(tmp_path, monkeypatch):
+    import workspace.parser_service as service
+    queue = tmp_path / 'queue'; queue.mkdir(mode=0o700)
+    job = str(uuid.uuid4())
+    (queue / f'{job}.input').write_bytes(b'synthetic active input')
+    (queue / f'{job}.request').write_text('{"synthetic":"active"}')
+    pid_file = tmp_path / 'parser.pid'
+    pid_file.write_text('1234')
+    monkeypatch.setattr(service, 'HEALTH_PID_FILE', pid_file)
+    monkeypatch.setattr(service, '_parser_process_alive', lambda pid: pid == 1234)
+    assert inspect_queue(queue)['recovery_required'] is True
+    assert service.healthy(queue) is True
+
+
+def test_parser_healthcheck_rejects_recovery_required_entry_beyond_metadata_cap(tmp_path, monkeypatch):
+    import workspace.parser_service as service
+    queue = tmp_path / 'queue'; queue.mkdir(mode=0o700)
+    for value in range(1, 65):
+        (queue / f'{uuid.UUID(int=value)}.error').write_text('closed synthetic receipt\n')
+    (queue / 'zz-unsafe').write_text('synthetic fixture')
+    state = inspect_queue(queue)
+    assert state['truncated'] is True
+    assert state['recovery_required'] is True
+    assert all(entry['kind'] == 'error' for entry in state['entries'])
+    pid_file = tmp_path / 'parser.pid'
+    pid_file.write_text('1234')
+    monkeypatch.setattr(service, 'HEALTH_PID_FILE', pid_file)
+    monkeypatch.setattr(service, '_parser_process_alive', lambda pid: pid == 1234)
+    assert service.healthy(queue) is False
+
+
+def test_parser_healthcheck_command_requires_a_live_service(tmp_path):
+    queue = tmp_path / 'queue'; queue.mkdir(mode=0o700)
+    project = Path(__file__).resolve().parents[1]
+    process = subprocess.Popen(
+        [sys.executable, '-B', '-m', 'workspace.parser_service', str(queue)],
+        cwd=project,
+        env={**os.environ, 'PYTHONPATH': str(project)},
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and process.poll() is None:
+            health = subprocess.run(
+                [sys.executable, '-B', '-m', 'workspace.parser_service', '--healthcheck', str(queue)],
+                cwd=project, env={**os.environ, 'PYTHONPATH': str(project)},
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            if health.returncode == 0:
+                break
+            time.sleep(0.05)
+        assert process.poll() is None and health.returncode == 0
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+    assert subprocess.run(
+        [sys.executable, '-B', '-m', 'workspace.parser_service', '--healthcheck', str(queue)],
+        cwd=project, env={**os.environ, 'PYTHONPATH': str(project)},
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ).returncode == 1
+
+
+def test_app_health_endpoint_is_available_without_a_session(store):
+    app = create_app(store.root)
+    response = TestClient(app, base_url='http://127.0.0.1:8710').get('/healthz')
+    assert response.status_code == 200
+    assert response.json() == {'status': 'ok'}
+
+
 @pytest.fixture
 def store(tmp_path):
     return initialize(tmp_path / 'state', 'http://127.0.0.1:8710', 'Synthetic practice', engagement_id='00000000-0000-4000-8000-000000000001')

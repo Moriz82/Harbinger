@@ -27,3 +27,4 @@ packages = ["workspace"]
 "contracts" = "contracts"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
