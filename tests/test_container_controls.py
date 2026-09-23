@@ -567,6 +567,7 @@ def test_parser_queue_recovery_audits_metadata_blocks_mutations_and_refuses_back
     audit = (store.root / 'audit.jsonl').read_text()
     assert 'parser.recovery_required' in audit and job in audit and request['sha256'] in audit and raw.decode() not in audit
     client = TestClient(app, base_url='http://127.0.0.1:8710', headers={'Origin': 'http://127.0.0.1:8710'})
+    assert client.get('/healthz').status_code == 503
     assert client.post('/api/login', json={'name': 'host', 'password': 'synthetic-test-password'}).status_code == 503
     with pytest.raises(RuntimeError, match='parser queue'):
         backup(store, tmp_path / 'backup')

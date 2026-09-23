@@ -79,6 +79,10 @@ The signed original remains restricted to verification, replay detection, and au
 
 The browser shows the last successful sync time. It keeps the loaded view and unsaved text in memory. It disables server writes after connection loss or a refused mutation. An event-stream reconnect does not enable writes by itself; the browser first checks the authenticated `/api/readiness` writer gate. Failed readiness checks keep writes disabled. Save urgent text to a file in the approved encrypted workspace. The browser does not store client prose in local storage.
 
+An open event stream does not extend the 30-minute idle session limit. If the session expires, Harbinger keeps the current finding text on screen and shows **Sign in again**. Select **Save draft file** first if text is unsaved. Signing in again clears local text; the dialog requires an explicit choice. The Docker `/healthz` check reports a degraded state when the audit writer or private storage blocks writes. Inspect the workspace before restarting work.
+
+Imports, Evidence, Findings, and the supporting-evidence picker load bounded pages. Select **Load more** to reach older records. The count on screen describes loaded records, not the whole engagement.
+
 ## Back up and restore
 
 Stop the service. Back up to a new directory:

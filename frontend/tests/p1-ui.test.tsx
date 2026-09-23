@@ -76,6 +76,37 @@ it('keeps writes disabled when reconnect readiness fails', async () => {
   expect(screen.getByRole('button', { name: 'Sign out' })).toBeDisabled()
 })
 
+it('keeps an unsaved finding visible when the session expires', async () => {
+  const leave = vi.fn()
+  fetchMock.mockImplementation((path: string) => {
+    if (path === '/api/session-status') return response({ active: false })
+    if (path === '/api/records?kind=finding') return response({ items: [finding], total: 1 })
+    if (path === '/api/evidence') return response({ items: [] })
+    if (path === '/api/users') return response({ items: [] })
+    if (path === '/api/readiness') return response({ write_ready: true })
+    if (path.startsWith('/api/graph')) return response({ nodes: [], edges: [], total_nodes: 0, total_edges: 0 })
+    if (path.startsWith('/api/assets')) return response({ items: [], total: 0 })
+    return response({ items: [], total: 0 })
+  })
+  render(<Shell session={session} onLogout={leave} />)
+  act(() => eventSource.emit('open'))
+  fireEvent.click(await screen.findByRole('link', { name: 'Findings' }))
+  const observation = await screen.findByLabelText('Observation')
+  fireEvent.change(observation, { target: { value: 'Unsaved local finding' } })
+  act(() => eventSource.fail())
+  expect(await screen.findByText(/Session expired/)).toBeInTheDocument()
+  expect(observation).toHaveValue('Unsaved local finding')
+  expect(screen.getByRole('button', { name: 'Save draft file' })).toBeEnabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }))
+  expect(await screen.findByRole('dialog', { name: 'Unsaved finding changes' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Stay and save draft file' }))
+  expect(observation).toHaveValue('Unsaved local finding')
+  expect(leave).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in again and clear local text' }))
+  expect(leave).toHaveBeenCalledTimes(1)
+})
+
 it('requires explicit review of partial import limitations before merge', async () => {
   const upload = { id: 'upload-1', kind: 'upload', revision_id: 'u1', updated_at: '', data: { filename: 'partial.xml', format: 'nmap_text', status: 'uploaded' } }
   fetchMock.mockImplementation((path: string, init?: RequestInit) => {

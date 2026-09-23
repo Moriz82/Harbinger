@@ -127,9 +127,11 @@ def create_app(root):
                 return JSONResponse(status_code=503, content={'detail': 'Peer request auditing is unavailable.'})
         if store.blocked and request.method not in ('GET', 'HEAD'):
             return JSONResponse(status_code=503, content={'detail': store.blocked})
-        request.state.session = auth.session(store, request.cookies.get(cookie))
+        passive_auth = request.url.path in ('/api/events', '/api/session-status', '/api/readiness')
+        request.state.session = None if request.url.path == '/healthz' else auth.session(
+            store, request.cookies.get(cookie), touch=not passive_auth)
         if request.url.path.startswith('/api/'):
-            if request.url.path not in ('/api/session', '/api/login') and not request.state.session:
+            if request.url.path not in ('/api/session', '/api/session-status', '/api/login') and not request.state.session:
                 response = JSONResponse(status_code=401, content={'detail': 'Sign in to continue.'})
             if request.method not in ('GET', 'HEAD'):
                 if request.headers.get('origin') != origin:
@@ -230,8 +232,16 @@ def create_app(root):
     def get_session(request: Request):
         return session_response(request.state.session)
 
+    @app.get('/api/session-status')
+    def session_status(request: Request):
+        return {'active': request.state.session is not None}
+
     @app.get('/healthz')
     def healthz():
+        try:
+            store.require_write_ready()
+        except Exception:
+            return JSONResponse(status_code=503, content={'status': 'degraded'})
         return {'status': 'ok'}
 
     @app.get('/api/readiness')
@@ -732,7 +742,7 @@ def create_app(root):
         async def stream():
             last = start
             while not await request.is_disconnected():
-                if not auth.session(store, request.cookies.get(cookie)):
+                if not auth.session(store, request.cookies.get(cookie), touch=False):
                     break
                 with store.connect() as c:
                     head = c.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]

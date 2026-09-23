@@ -1,5 +1,7 @@
 # Readiness
 
+**Current checkout, 2026-09-23 UTC:** Local synthetic checks passed after pagination, off-page evidence refresh, session-expiry, and writable-storage health changes: 285 backend tests and 76 frontend tests, with five role-specific backend skips; TypeScript and the production build passed. The current built browser UI passed the synthetic fixture at three viewports; see the local result at `/home/moriz/.local/state/harbinger-merlin-e2e/browser-current-r2/harbinger/RESULTS.json`. The Dell host is offline, so the changed Docker image, two-VM workflow, and CPTC11 evidence path are **not yet revalidated**. The table below records the earlier checkpoint and must not be used as a current release claim.
+
 This private checkpoint separates current source and local synthetic checks from historical deployment checks on both designated Kali VMs.
 
 Last checked: 2026-09-22 UTC.

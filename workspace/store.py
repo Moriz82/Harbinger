@@ -155,8 +155,20 @@ class Store:
             raise RuntimeError('This workspace is open read-only')
         if self.blocked:
             raise RuntimeError(self.blocked)
-        for name in ("", "workspace.db", "audit.jsonl", "transcript.log", "artifacts", "keys", "staging", "conflicts", "exports"):
-            private(self.root / name)
+        directories = ("", "artifacts", "keys", "staging", "conflicts", "exports")
+        files = ("workspace.db", "audit.jsonl", "transcript.log")
+        for name in directories + files:
+            path = self.root / name
+            private(path)
+            mode = path.lstat().st_mode
+            if name in directories:
+                ready = stat.S_ISDIR(mode) and mode & 0o700 == 0o700
+            else:
+                ready = stat.S_ISREG(mode) and mode & 0o600 == 0o600
+            if not ready:
+                raise RuntimeError('Private storage is not writable or has the wrong type. Stop and inspect the workspace.')
+        if os.statvfs(self.root).f_flag & getattr(os, 'ST_RDONLY', 1):
+            raise RuntimeError('Private storage is read-only. Stop and inspect the workspace.')
         if self.audit_stats is not None and self.audit_stats != self._stats():
             self.blocked = 'Audit files changed outside the writer. Inspect integrity before new work.'
             raise RuntimeError(self.blocked)
