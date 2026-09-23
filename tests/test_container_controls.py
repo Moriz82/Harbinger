@@ -6,6 +6,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -254,10 +255,98 @@ def test_parser_queue_roundtrip_and_cleanup(tmp_path):
         result = queue_parser(source, 'nmap_xml', queue)
         assert result['complete'] is True
         assert any(item['label'] == '192.0.2.44' for item in result['assets'])
+        time.sleep(.2)
         assert not list(queue.iterdir())
     finally:
         process.terminate()
         process.wait(timeout=5)
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Only Harbinger runs an import parser')
+def test_parser_client_waits_for_service_to_retire_successful_job(tmp_path):
+    queue = tmp_path / 'queue'; queue.mkdir(mode=0o700)
+    source = tmp_path / 'input.xml'; source.write_bytes(NMAP)
+    failures = []
+
+    def parser_service_stub():
+        try:
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                pending = list(queue.glob('*.request'))
+                if pending:
+                    break
+                time.sleep(.005)
+            else:
+                raise AssertionError('No parser request arrived')
+            running = pending[0].with_suffix('.running')
+            pending[0].rename(running)
+            atomic_file(running.with_suffix('.response'), json.dumps({
+                'assets': [], 'relationships': [], 'observations': [],
+                'limitations': [], 'complete': True, 'quarantined': [],
+            }).encode())
+            time.sleep(.2)
+            assert running.exists(), 'Client removed an active parser job'
+            running.unlink()
+        except Exception as error:
+            failures.append(error)
+
+    worker = threading.Thread(target=parser_service_stub, daemon=True)
+    worker.start()
+    started = time.monotonic()
+    result = queue_parser(source, 'nmap_xml', queue)
+    elapsed = time.monotonic() - started
+    worker.join(timeout=3)
+    assert not worker.is_alive() and not failures
+    assert result['complete'] is True
+    assert elapsed >= .19
+    assert not list(queue.iterdir())
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Only Harbinger runs an import parser')
+def test_parser_timeout_preserves_request_and_cancel_for_recovery(tmp_path, monkeypatch):
+    import workspace.isolation as isolation
+    queue = tmp_path / 'queue'; queue.mkdir(mode=0o700)
+    source = tmp_path / 'input.xml'; source.write_bytes(NMAP)
+    monkeypatch.setattr(isolation, 'PARSER_WAIT_SECONDS', .1)
+    with pytest.raises(RuntimeError, match='deadline'):
+        queue_parser(source, 'nmap_xml', queue)
+    state = inspect_queue(queue)
+    assert state['recovery_required']
+    assert {entry['kind'] for entry in state['entries']} == {'input', 'request', 'cancel'}
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Only Harbinger runs an import parser')
+def test_parser_failure_keeps_terminal_error_receipt(tmp_path):
+    queue = tmp_path / 'queue'; queue.mkdir(mode=0o700)
+    source = tmp_path / 'input.xml'; source.write_bytes(NMAP)
+    failures = []
+
+    def parser_service_stub():
+        try:
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                pending = list(queue.glob('*.request'))
+                if pending:
+                    break
+                time.sleep(.005)
+            else:
+                raise AssertionError('No parser request arrived')
+            running = pending[0].with_suffix('.running')
+            pending[0].rename(running)
+            atomic_file(running.with_suffix('.error'), b'The parser did not accept this file. No records were merged.\n')
+            running.unlink()
+        except Exception as error:
+            failures.append(error)
+
+    worker = threading.Thread(target=parser_service_stub, daemon=True)
+    worker.start()
+    with pytest.raises(RuntimeError, match='did not accept'):
+        queue_parser(source, 'nmap_xml', queue)
+    worker.join(timeout=3)
+    assert not worker.is_alive() and not failures
+    state = inspect_queue(queue)
+    assert not state['recovery_required']
+    assert [entry['kind'] for entry in state['entries']] == ['error']
 
 
 @pytest.mark.parametrize('subtree,kind', [

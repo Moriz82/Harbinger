@@ -16,6 +16,7 @@ from .parsers import FORMATS, FORMAT_LIMITS
 from .parser_service import QUEUE_FILE_LIMITS, _open_queue, _queue_file_exists_at, _read_queue_file_at
 
 _slot = threading.Lock()
+PARSER_WAIT_SECONDS = 125
 
 
 def memfd():
@@ -45,6 +46,8 @@ def queue_parser(path, format, queue):
     error_path = root / f'{job}.error'
     cancel_path = root / f'{job}.cancel'
     paths = (input_path, request_path, temp_path, response_path, error_path, cancel_path, root / f'{job}.running')
+    request_published = False
+    terminal = None
     try:
         digest = hashlib.sha256()
         source = Path(path)
@@ -69,7 +72,8 @@ def queue_parser(path, format, queue):
             f.flush()
             os.fsync(f.fileno())
         os.replace(temp_path, request_path)
-        deadline = time.monotonic() + 125
+        request_published = True
+        deadline = time.monotonic() + PARSER_WAIT_SECONDS
         while time.monotonic() < deadline:
             try:
                 raw = _read_queue_file_at(queue_fd, response_path.name, QUEUE_FILE_LIMITS['response'])
@@ -78,9 +82,31 @@ def queue_parser(path, format, queue):
             except (OSError, ValueError) as error:
                 raise RuntimeError('Parser output is unavailable.') from error
             if raw is not None:
+                # The child publishes the response before the parser service has
+                # checked it and retired the running job. Leave the queue intact
+                # until that final check finishes, or cleanup can create a false
+                # error receipt for a successful import.
+                try:
+                    _queue_file_exists_at(queue_fd, f'{job}.running', QUEUE_FILE_LIMITS['running'])
+                except FileNotFoundError:
+                    pass
+                except (OSError, ValueError) as error:
+                    raise RuntimeError('Parser completion is unavailable.') from error
+                else:
+                    time.sleep(.05)
+                    continue
+                try:
+                    _queue_file_exists_at(queue_fd, error_path.name, QUEUE_FILE_LIMITS['error'])
+                except FileNotFoundError:
+                    pass
+                except (OSError, ValueError) as error:
+                    raise RuntimeError('Parser error receipt is unavailable.') from error
+                else:
+                    raise RuntimeError('Conflicting parser completion receipts require review.')
                 result = json.loads(raw)
                 if set(result) != {'assets', 'relationships', 'observations', 'limitations', 'complete', 'quarantined'}:
                     raise RuntimeError('Invalid parser result.')
+                terminal = 'success'
                 return result
             try:
                 _queue_file_exists_at(queue_fd, error_path.name, QUEUE_FILE_LIMITS['error'])
@@ -89,19 +115,32 @@ def queue_parser(path, format, queue):
             except (OSError, ValueError) as error:
                 raise RuntimeError('Parser error receipt is unavailable.') from error
             else:
-                raise RuntimeError('The networkless parser did not accept this file.')
+                try:
+                    _queue_file_exists_at(queue_fd, f'{job}.running', QUEUE_FILE_LIMITS['running'])
+                except FileNotFoundError:
+                    terminal = 'error'
+                    raise RuntimeError('The networkless parser did not accept this file.')
+                except (OSError, ValueError) as error:
+                    raise RuntimeError('Parser completion is unavailable.') from error
+                time.sleep(.05)
+                continue
             time.sleep(.05)
         cancel_path.touch(mode=0o600, exist_ok=False)
         raise RuntimeError('Parsing stopped at its deadline. No records were merged.')
     finally:
         os.close(queue_fd)
-        for candidate in paths:
-            try:
-                candidate.unlink()
-            except FileNotFoundError:
-                pass
-        for temporary in root.glob(f'.{job}.*.tmp'):
-            temporary.unlink(missing_ok=True)
+        # A timed out or ambiguous job must remain visible to recovery. Never
+        # erase an active request, cancellation marker, or terminal error proof.
+        if not request_published or terminal is not None:
+            for candidate in paths:
+                if terminal == 'error' and candidate == error_path:
+                    continue
+                try:
+                    candidate.unlink()
+                except FileNotFoundError:
+                    pass
+            for temporary in root.glob(f'.{job}.*.tmp'):
+                temporary.unlink(missing_ok=True)
 
 
 def run_parser(path, format):
