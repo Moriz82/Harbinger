@@ -316,6 +316,22 @@ def test_parser_timeout_preserves_request_and_cancel_for_recovery(tmp_path, monk
 
 
 @pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Only Harbinger runs an import parser')
+def test_parser_publish_failure_preserves_uncertain_queue_files(tmp_path, monkeypatch):
+    queue = tmp_path / 'queue'; queue.mkdir(mode=0o700)
+    source = tmp_path / 'input.xml'; source.write_bytes(NMAP)
+
+    def fail_publish(*_):
+        raise OSError('synthetic rename failure')
+
+    monkeypatch.setattr(os, 'replace', fail_publish)
+    with pytest.raises(OSError, match='synthetic rename failure'):
+        queue_parser(source, 'nmap_xml', queue)
+    assert len(list(queue.glob('*.input'))) == 1
+    assert len(list(queue.glob('.*.request.tmp'))) == 1
+    assert inspect_queue(queue)['recovery_required']
+
+
+@pytest.mark.skipif(APP_NAME != 'Harbinger', reason='Only Harbinger runs an import parser')
 def test_parser_failure_keeps_terminal_error_receipt(tmp_path):
     queue = tmp_path / 'queue'; queue.mkdir(mode=0o700)
     source = tmp_path / 'input.xml'; source.write_bytes(NMAP)

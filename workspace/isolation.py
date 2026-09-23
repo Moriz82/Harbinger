@@ -71,8 +71,10 @@ def queue_parser(path, format, queue):
             f.write(request)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(temp_path, request_path)
+        # Mark the handoff uncertain before publishing. A signal between the
+        # rename and the next Python statement must not erase a live request.
         request_published = True
+        os.replace(temp_path, request_path)
         deadline = time.monotonic() + PARSER_WAIT_SECONDS
         while time.monotonic() < deadline:
             try:
