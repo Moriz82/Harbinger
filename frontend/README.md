@@ -1,6 +1,6 @@
 # Harbinger frontend
 
-The Vite app is the private Harbinger evidence desk. It uses same-origin `fetch` calls and the API contract in the approved plan. It does not ship fixture data or scanner/model integrations.
+The Vite app is the local Harbinger evidence desk. It uses same-origin `fetch` calls and the API contract in the approved plan. It does not ship fixture data or scanner/model integrations.
 
 ```sh
 npm ci

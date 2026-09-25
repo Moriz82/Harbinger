@@ -1,6 +1,6 @@
 # Harbinger
 
-Harbinger is a private evidence desk. It imports human-run tool output, maps relationships, and keeps technical finding notes. It does not run scanners, exploits, or model transport.
+Harbinger is a local evidence desk. It imports human-run tool output, maps relationships, and keeps technical finding notes. It does not run scanners, exploits, or model transport. This source repository is public; engagement data and credentials remain private.
 
 ## First local start
 
